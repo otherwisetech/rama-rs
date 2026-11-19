@@ -1,6 +1,6 @@
 [package]
 name = "rama-repo"
-description = "Read a git repository (history, refs, commit changes, diffs) with gitoxide"
+description = "Read a git repository with gitoxide; working copy and writes through the git CLI"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,10 @@ name = "repo"
 graph.workspace = true
 gix = { version = "0.90", default-features = false, features = ["revision", "blob-diff", "sha1", "parallel", "mailmap"] }
 similar = "2"
+trash = "5"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

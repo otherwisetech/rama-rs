@@ -6,6 +6,8 @@ use crate::util::{datetime, initials};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::IconName;
+use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
+use crate::work::{Op, PromptKind};
 use repo::{History, RefInfo, RefKind};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -31,7 +33,8 @@ impl RamaApp {
     pub(crate) fn render_graph(&mut self, t: &Tokens, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(h) = self.history.clone() else { return div().into_any_element() };
         if h.commits.is_empty() {
-            return div().size_full().flex().items_center().justify_center().text_color(t.ink_muted).child(i18n::t!("app.graph.empty")).into_any_element();
+            let wip = self.render_wip_row(t, lane_x(0), t.lane(0), GRAPH_PAD * 2. + LANE_W, REFS_W, cx);
+            return div().size_full().flex().flex_col().bg(t.surface).children(wip).child(div().flex_1().flex().items_center().justify_center().text_color(t.ink_muted).child(i18n::t!("app.graph.empty"))).into_any_element();
         }
         let lanes = h.rows.iter().map(|r| r.width).max().unwrap_or(1).clamp(1, MAX_LANES);
         let graph_w = GRAPH_PAD * 2. + LANE_W * lanes as f32;
@@ -61,12 +64,16 @@ impl RamaApp {
             .child(header_cell(Some(AUTHOR_W), i18n::t!("app.graph.col_author")))
             .child(header_cell(Some(DATE_W), i18n::t!("app.graph.col_date")))
             .child(header_cell(Some(SHA_W), i18n::t!("app.graph.col_sha")));
+        let head_row = h.head.and_then(|id| h.index.get(&id).copied()).map(|r| &h.rows[r]);
+        let (wip_x, wip_color) = head_row.map(|r| (lane_x(r.lane.min(lanes)), t.lane(r.color))).unwrap_or((lane_x(0), t.lane(0)));
+        let wip = self.render_wip_row(t, wip_x, wip_color, graph_w, REFS_W, cx);
+        let weak = cx.entity().downgrade();
         let list = uniform_list(
             "commits",
             h.commits.len(),
             cx.processor(move |_this, range: std::ops::Range<usize>, _window, cx| {
                 let t = tokens(cx);
-                range.map(|ix| commit_row(&t, &h, &refs_by_row, mask.as_ref(), ix, graph_w, lanes, selected == Some(ix), cx)).collect::<Vec<_>>()
+                range.map(|ix| commit_row(&t, &h, &refs_by_row, mask.as_ref(), ix, graph_w, lanes, selected == Some(ix), weak.clone(), cx)).collect::<Vec<_>>()
             }),
         )
         .track_scroll(&self.list_scroll)
@@ -78,6 +85,7 @@ impl RamaApp {
             .size_full()
             .bg(t.surface)
             .child(header)
+            .children(wip)
             .child(list)
             .when(truncated, |d| d.child(div().flex_none().px(px(12.)).py(px(6.)).border_t_1().border_color(t.border).text_size(px(12.)).text_color(t.ink_muted).child(i18n::t!("app.graph.truncated"))))
             .into_any_element()
@@ -85,7 +93,7 @@ impl RamaApp {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn commit_row(t: &Tokens, h: &Arc<History>, refs_by_row: &HashMap<usize, Vec<usize>>, mask: Option<&Rc<Vec<bool>>>, ix: usize, graph_w: f32, lanes: u16, selected: bool, cx: &mut Context<RamaApp>) -> AnyElement {
+fn commit_row(t: &Tokens, h: &Arc<History>, refs_by_row: &HashMap<usize, Vec<usize>>, mask: Option<&Rc<Vec<bool>>>, ix: usize, graph_w: f32, lanes: u16, selected: bool, weak: WeakEntity<RamaApp>, cx: &mut Context<RamaApp>) -> AnyElement {
     let c = &h.commits[ix];
     let row = &h.rows[ix];
     let color = t.lane(row.color);
@@ -184,6 +192,27 @@ fn commit_row(t: &Tokens, h: &Arc<History>, refs_by_row: &HashMap<usize, Vec<usi
             this.list_focus.focus(window, cx);
             this.select(ix, false, cx);
         }))
+        .context_menu({
+            let id = c.id;
+            let branches: Vec<String> = refs.iter().filter(|r| r.kind == RefKind::Local && h.head_branch.as_deref() != Some(r.name.as_str())).map(|r| r.name.clone()).collect();
+            move |mut menu, _, _| {
+                for b in &branches {
+                    let (w, b) = (weak.clone(), b.clone());
+                    menu = menu.item(PopupMenuItem::new(i18n::t!("app.menu.checkout", name = b)).on_click(move |_, _, cx| {
+                        w.update(cx, |this, cx| this.run_op(Op::Switch(b.clone()), cx)).ok();
+                    }));
+                }
+                let w = weak.clone();
+                menu = menu.item(PopupMenuItem::new(i18n::t!("app.menu.new_branch")).on_click(move |_, window, cx| {
+                    w.update(cx, |this, cx| this.open_prompt(PromptKind::NewBranch(id), window, cx)).ok();
+                }));
+                let w = weak.clone();
+                menu.separator().item(PopupMenuItem::new(i18n::t!("app.menu.copy_sha")).on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(id.to_string()));
+                    w.update(cx, |this, cx| this.toast(i18n::t!("app.toast.copied", sha = id.to_hex_with_len(7)), cx)).ok();
+                }))
+            }
+        })
         .into_any_element()
 }
 

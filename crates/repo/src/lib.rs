@@ -1,11 +1,19 @@
-//! Read-only view of a git repository through gitoxide: history laid out as a graph, refs,
-//! the files a commit changed and line diffs. No UI.
+//! A git repository: history laid out as a graph, refs, the files a commit changed and line
+//! diffs, read through gitoxide; working-copy status and every write through the `git` CLI
+//! (`work`, `git`). No UI.
 use gix::bstr::ByteSlice;
 use gix::ObjectId;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use gix::ObjectId as Oid;
+
+mod git;
+pub mod shell_env;
+mod work;
+
+pub use git::{Cancel, GitError, Run, failed_hook, strip_ansi, version as git_version};
+pub use work::{BranchStatus, FileState, Stash, WorkFile, WorkStatus, parse_stash_list, parse_status, parse_unified};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -138,6 +146,13 @@ pub struct FileChange {
     pub binary: bool,
     pub(crate) old: Option<ObjectId>,
     pub(crate) new: Option<ObjectId>,
+}
+
+impl FileChange {
+    /// A change that isn't between two blobs (a working-copy file); [`Repo::diff`] of it is empty.
+    pub fn detached(path: String, status: Status, added: u32, removed: u32, binary: bool) -> FileChange {
+        FileChange { path, status, added, removed, binary, old: None, new: None }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

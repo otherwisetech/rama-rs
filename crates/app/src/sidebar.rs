@@ -1,11 +1,14 @@
-//! Left sidebar: local branches, remote branches and tags, foldable, virtualised (some repos have
-//! tens of thousands of remote refs). Clicking a ref jumps to its commit.
+//! Left sidebar: local branches, remote branches, tags and stashes, foldable, virtualised (some
+//! repos have tens of thousands of remote refs). Clicking a ref jumps to its commit;
+//! double-clicking a branch checks it out; right-click for branch and stash actions.
 use crate::app::RamaApp;
 use crate::theme::{Tokens, tokens};
 use crate::ui::icon;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::IconName;
+use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
+use crate::work::{Confirm, Op, PromptKind};
 use repo::RefKind;
 
 const SIDE_W: f32 = 250.;
@@ -15,6 +18,8 @@ const ITEM_H: f32 = 26.;
 enum Item {
     Header(RefKind, usize),
     Ref(usize),
+    StashHeader(usize),
+    Stash(usize),
 }
 
 fn section_name(k: RefKind) -> String {
@@ -34,6 +39,13 @@ impl RamaApp {
             items.push(Item::Header(kind, refs.len()));
             if !self.collapsed.contains(&kind) {
                 items.extend(refs.into_iter().map(Item::Ref));
+            }
+        }
+        let n = self.work.stashes.len();
+        if n > 0 {
+            items.push(Item::StashHeader(n));
+            if !self.stashes_collapsed {
+                items.extend((0..n).map(Item::Stash));
             }
         }
         items
@@ -94,6 +106,64 @@ impl RamaApp {
                     }))
                     .into_any_element()
             }
+            Item::StashHeader(n) => {
+                let open = !self.stashes_collapsed;
+                div()
+                    .id(("side", ix))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .h(px(ITEM_H))
+                    .px(px(12.))
+                    .mt(px(6.))
+                    .cursor_pointer()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(t.ink_muted)
+                    .child(icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 12., t.ink_muted))
+                    .child(div().flex_1().child(i18n::t!("app.side.stashes")))
+                    .child(div().text_size(px(11.)).child(crate::util::group(n)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.stashes_collapsed = !this.stashes_collapsed;
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            }
+            Item::Stash(i) => {
+                let Some(st) = self.work.stashes.get(i) else { return div().into_any_element() };
+                let on = self.work.stash.as_ref().is_some_and(|s| s.stash.id == st.id);
+                let weak = cx.entity().downgrade();
+                div()
+                    .id(("side", ix))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .h(px(ITEM_H))
+                    .pl(px(28.))
+                    .pr(px(12.))
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(t.accent_soft))
+                    .when(!on, |d| d.hover(move |s| s.bg(hover)))
+                    .child(icon(IconName::Inbox, 12., t.ink_muted).flex_none())
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).child(st.message.clone()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.select_stash(i, cx)))
+                    .context_menu(move |menu, _, _| {
+                        let item = |label: String, f: fn(&mut RamaApp, usize, &mut Context<RamaApp>)| {
+                            let w = weak.clone();
+                            PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                                w.update(cx, |this, cx| f(this, i, cx)).ok();
+                            })
+                        };
+                        menu.item(item(i18n::t!("app.stash.apply"), |this, i, cx| this.run_op(Op::StashApply(i), cx)))
+                            .item(item(i18n::t!("app.stash.pop"), |this, i, cx| this.run_op(Op::StashPop(i), cx)))
+                            .separator()
+                            .item(item(i18n::t!("app.stash.drop_menu"), |this, i, cx| {
+                                this.work.confirm = Some(Confirm::DropStash(i));
+                                cx.notify();
+                            }))
+                    })
+                    .into_any_element()
+            }
             Item::Ref(i) => {
                 let Some(h) = &self.history else { return div().into_any_element() };
                 let r = &h.refs[i];
@@ -102,6 +172,10 @@ impl RamaApp {
                 let on_selected = row.is_some() && row == self.selected;
                 let dot = row.map(|row| t.lane(h.rows[row].color)).unwrap_or(t.border_strong);
                 let target = r.target;
+                let kind = r.kind;
+                let name = r.name.clone();
+                let menu_name = r.name.clone();
+                let weak = cx.entity().downgrade();
                 let ic_color = if is_head { t.accent } else { t.ink_muted };
                 let ic: AnyElement = match r.kind {
                     RefKind::Local if is_head => icon(IconName::Check, 12., ic_color).flex_none().into_any_element(),
@@ -123,7 +197,49 @@ impl RamaApp {
                     .child(ic)
                     .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).when(is_head, |d| d.font_weight(FontWeight::SEMIBOLD)).when(row.is_none(), |d| d.text_color(t.ink_muted)).child(r.name.clone()))
                     .child(div().flex_none().size(px(7.)).rounded_full().bg(dot))
-                    .on_click(cx.listener(move |this, _, _, cx| this.select_id(target, cx)))
+                    .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
+                        if ev.click_count() == 2 && !is_head {
+                            match kind {
+                                RefKind::Local => this.run_op(Op::Switch(name.clone()), cx),
+                                RefKind::Remote => this.run_op(Op::SwitchRemote(name.clone()), cx),
+                                RefKind::Tag => {}
+                            }
+                        } else {
+                            this.select_id(target, cx);
+                        }
+                    }))
+                    .context_menu(move |mut menu, _, _| {
+                        let w = weak.clone();
+                        let n = menu_name.clone();
+                        match kind {
+                            RefKind::Local => {
+                                menu = menu.item(PopupMenuItem::new(i18n::t!("app.menu.checkout", name = n)).disabled(is_head).on_click(move |_, _, cx| {
+                                    w.update(cx, |this, cx| this.run_op(Op::Switch(n.clone()), cx)).ok();
+                                }));
+                            }
+                            RefKind::Remote => {
+                                menu = menu.item(PopupMenuItem::new(i18n::t!("app.menu.checkout_remote", name = n)).on_click(move |_, _, cx| {
+                                    w.update(cx, |this, cx| this.run_op(Op::SwitchRemote(n.clone()), cx)).ok();
+                                }));
+                            }
+                            RefKind::Tag => {}
+                        }
+                        let w = weak.clone();
+                        menu = menu.item(PopupMenuItem::new(i18n::t!("app.menu.new_branch")).on_click(move |_, window, cx| {
+                            w.update(cx, |this, cx| this.open_prompt(PromptKind::NewBranch(target), window, cx)).ok();
+                        }));
+                        if kind == RefKind::Local {
+                            let (w, n) = (weak.clone(), menu_name.clone());
+                            menu = menu.separator().item(PopupMenuItem::new(i18n::t!("app.menu.delete_branch")).disabled(is_head).on_click(move |_, _, cx| {
+                                w.update(cx, |this, cx| {
+                                    this.work.confirm = Some(Confirm::DeleteBranch(n.clone()));
+                                    cx.notify();
+                                })
+                                .ok();
+                            }));
+                        }
+                        menu
+                    })
                     .into_any_element()
             }
         }

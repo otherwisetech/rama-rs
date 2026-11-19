@@ -7,9 +7,9 @@ use crate::util::{datetime, initials};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::IconName;
-use repo::{FileChange, RefKind, Status};
+use repo::{FileChange, FileState, RefKind, Status};
 
-const DETAIL_W: f32 = 380.;
+pub(crate) const DETAIL_W: f32 = 380.;
 
 pub fn status_letter(s: &Status) -> &'static str {
     match s {
@@ -27,6 +27,38 @@ pub fn status_color(t: &Tokens, s: &Status) -> Hsla {
         Status::Deleted => t.removed,
         Status::Modified => t.tag,
         Status::Renamed { .. } | Status::Copied { .. } => t.accent,
+    }
+}
+
+/// VS Code's letters: U untracked, ! conflicted.
+pub fn work_letter(s: &FileState) -> &'static str {
+    match s {
+        FileState::Added => "A",
+        FileState::Modified => "M",
+        FileState::Deleted => "D",
+        FileState::Renamed { .. } => "R",
+        FileState::Copied { .. } => "C",
+        FileState::TypeChanged => "T",
+        FileState::Untracked => "U",
+        FileState::Conflicted => "!",
+    }
+}
+
+pub fn work_color(t: &Tokens, s: &FileState) -> Hsla {
+    match s {
+        FileState::Conflicted => t.danger,
+        FileState::Untracked => t.added,
+        other => status_color(t, &work_status(other)),
+    }
+}
+
+pub fn work_status(s: &FileState) -> Status {
+    match s {
+        FileState::Added | FileState::Untracked => Status::Added,
+        FileState::Deleted => Status::Deleted,
+        FileState::Renamed { from } => Status::Renamed { from: from.clone() },
+        FileState::Copied { from } => Status::Copied { from: from.clone() },
+        FileState::Modified | FileState::TypeChanged | FileState::Conflicted => Status::Modified,
     }
 }
 
@@ -121,7 +153,7 @@ impl RamaApp {
     }
 }
 
-fn file_row(t: &Tokens, i: usize, f: &FileChange, open: bool, cx: &mut Context<RamaApp>) -> AnyElement {
+pub(crate) fn file_row(t: &Tokens, i: usize, f: &FileChange, open: bool, cx: &mut Context<RamaApp>) -> AnyElement {
     let (dir, name) = match f.path.rsplit_once('/') {
         Some((d, n)) => (format!("{d}/"), n.to_string()),
         None => (String::new(), f.path.clone()),

@@ -1,6 +1,6 @@
 //! Unified diff of one file, replacing the graph until closed (Esc).
 use crate::app::RamaApp;
-use crate::detail::{status_color, status_letter};
+use crate::detail::{status_color, status_letter, work_color, work_letter};
 use crate::theme::{MONO, Tokens, tokens};
 use crate::ui::{self, icon};
 use gpui::prelude::FluentBuilder as _;
@@ -15,7 +15,11 @@ impl RamaApp {
     pub(crate) fn render_diff(&mut self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(d) = &self.diff else { return div().into_any_element() };
         let f = &d.file;
-        let sc = status_color(t, &f.status);
+        let (letter, sc) = match &d.work {
+            Some((w, _)) => (work_letter(&w.state), work_color(t, &w.state)),
+            None => (status_letter(&f.status), status_color(t, &f.status)),
+        };
+        let side = d.work.as_ref().map(|(_, staged)| if *staged { i18n::t!("app.diff.staged") } else { i18n::t!("app.diff.unstaged") });
         let renamed = match &f.status {
             Status::Renamed { from } | Status::Copied { from } => Some(i18n::t!("app.diff.from", path = from)),
             _ => None,
@@ -33,8 +37,9 @@ impl RamaApp {
                 this.diff = None;
                 cx.notify();
             })))
-            .child(div().flex().flex_none().items_center().justify_center().size(px(18.)).rounded(px(4.)).bg(sc.opacity(0.16)).text_color(sc).text_size(px(10.)).font_weight(FontWeight::BOLD).child(status_letter(&f.status)))
+            .child(div().flex().flex_none().items_center().justify_center().size(px(18.)).rounded(px(4.)).bg(sc.opacity(0.16)).text_color(sc).text_size(px(10.)).font_weight(FontWeight::BOLD).child(letter))
             .child(div().flex().flex_col().min_w_0().flex_1().child(div().font_family(MONO).text_size(px(13.)).truncate().child(f.path.clone())).children(renamed.map(|r| div().text_size(px(11.)).text_color(t.ink_muted).truncate().child(r))))
+            .children(side.map(|s| div().flex_none().px(px(7.)).py(px(2.)).rounded(px(6.)).bg(t.canvas).text_size(px(11.)).text_color(t.ink_muted).child(s)))
             .child(div().flex_none().text_size(px(12.)).text_color(t.added).child(format!("+{}", f.added)))
             .child(div().flex_none().text_size(px(12.)).text_color(t.removed).child(format!("−{}", f.removed)))
             .child(div().flex_none().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.diff.esc")));
