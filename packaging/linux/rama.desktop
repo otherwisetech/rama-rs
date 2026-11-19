@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=rama
+GenericName=Git repository explorer
+Comment=Explore branches, commits and diffs of git repositories
+Exec=rama %f
+Icon=rama
+Terminal=false
+Categories=Development;RevisionControl;
+MimeType=inode/directory;

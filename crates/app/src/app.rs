@@ -1,0 +1,763 @@
+//! Window state: start screen → loading → sidebar | graph (or diff) | commit detail.
+use crate::theme::{SANS, Tokens, tokens};
+use crate::ui::{self, icon};
+use crate::util::group;
+use gpui::prelude::FluentBuilder as _;
+use gpui::*;
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::{IconName, Sizable as _, Theme};
+use repo::{DiffLine, FileChange, History, Oid, RefKind, Repo};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+pub(crate) const CONTEXT: &str = "RamaApp";
+/// Key context of the commit list area, so j/k/↑/↓ never reach the search field.
+pub(crate) const LIST_CONTEXT: &str = "CommitList";
+#[cfg(target_os = "macos")]
+const SEARCH_KEYS: &str = "⌘F"; // i18n-ok: shortcut
+#[cfg(not(target_os = "macos"))]
+const SEARCH_KEYS: &str = "Ctrl+F"; // i18n-ok: shortcut
+const TOAST_FOR: Duration = Duration::from_secs(4);
+/// Commits loaded per repository; enough for years of history in most projects.
+const HISTORY_LIMIT: usize = 50_000;
+
+actions!(rama, [OpenRepo, Reload, SelectPrev, SelectNext, CloseDiff, CopySha, FocusSearch, ShowAbout]);
+
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("secondary-o", OpenRepo, Some(CONTEXT)),
+        KeyBinding::new("secondary-r", Reload, Some(CONTEXT)),
+        KeyBinding::new("up", SelectPrev, Some(LIST_CONTEXT)),
+        KeyBinding::new("k", SelectPrev, Some(LIST_CONTEXT)),
+        KeyBinding::new("down", SelectNext, Some(LIST_CONTEXT)),
+        KeyBinding::new("j", SelectNext, Some(LIST_CONTEXT)),
+        KeyBinding::new("secondary-c", CopySha, Some(LIST_CONTEXT)),
+        KeyBinding::new("escape", CloseDiff, Some(CONTEXT)),
+        KeyBinding::new("secondary-f", FocusSearch, Some(CONTEXT)),
+    ]);
+}
+
+pub(crate) fn sync_theme(window: Option<&mut Window>, cx: &mut App) {
+    Theme::sync_system_appearance(window, cx);
+    Theme::global_mut(cx).font_family = SANS.into();
+}
+
+pub enum Phase {
+    Start,
+    Loading { path: PathBuf, started: Instant },
+    Ready,
+    Failed { path: PathBuf, message: String },
+}
+
+/// What the right panel shows for the selected commit; filled in from a background task.
+pub struct Details {
+    pub id: Oid,
+    pub message: Option<String>,
+    pub changes: Option<Result<Rc<Vec<FileChange>>, String>>,
+}
+
+pub struct DiffState {
+    pub file: FileChange,
+    pub lines: Option<Result<Rc<Vec<DiffLine>>, String>>,
+}
+
+pub struct RamaApp {
+    pub phase: Phase,
+    pub repo: Option<Repo>,
+    pub history: Option<Arc<History>>,
+    /// refs (indices into `history.refs`) per display row
+    pub refs_by_row: Rc<HashMap<usize, Vec<usize>>>,
+    load_gen: u64,
+    pub selected: Option<usize>,
+    pub details: Option<Details>,
+    pub diff: Option<DiffState>,
+    pub collapsed: HashSet<RefKind>,
+    pub list_scroll: UniformListScrollHandle,
+    pub side_scroll: UniformListScrollHandle,
+    pub diff_scroll: UniformListScrollHandle,
+    pub recent: Vec<PathBuf>,
+    pub search: Entity<InputState>,
+    /// Rows matching the search, top to bottom; `None` when the field is empty.
+    pub matches: Option<Arc<Vec<usize>>>,
+    /// `matches` as a per-row mask, for dimming the rest of the graph.
+    pub match_mask: Option<Rc<Vec<bool>>>,
+    pub match_ix: usize,
+    search_gen: u64,
+    placeholder_locale: &'static str,
+    focus: FocusHandle,
+    pub list_focus: FocusHandle,
+    toast: Option<(String, Instant)>,
+    /// The About modal is open.
+    pub about: bool,
+    logo: Arc<Image>,
+    _subs: Vec<Subscription>,
+}
+
+impl RamaApp {
+    pub fn new(initial: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        sync_theme(Some(window), cx);
+        let search = cx.new(|cx| InputState::new(window, cx));
+        let subs = vec![
+            window.observe_window_appearance(|window, cx| sync_theme(Some(window), cx)),
+            cx.subscribe_in(&search, window, |this, _, ev: &InputEvent, window, cx| match ev {
+                InputEvent::Change => this.run_search(cx),
+                InputEvent::PressEnter { shift, .. } => this.step_match(if *shift { -1 } else { 1 }, window, cx),
+                _ => {}
+            }),
+        ];
+        let focus = cx.focus_handle();
+        let list_focus = cx.focus_handle();
+        focus.focus(window, cx);
+        let mut this = RamaApp {
+            phase: Phase::Start,
+            repo: None,
+            history: None,
+            refs_by_row: Rc::new(HashMap::new()),
+            load_gen: 0,
+            selected: None,
+            details: None,
+            diff: None,
+            collapsed: HashSet::new(),
+            list_scroll: UniformListScrollHandle::new(),
+            side_scroll: UniformListScrollHandle::new(),
+            diff_scroll: UniformListScrollHandle::new(),
+            recent: crate::settings::recent(),
+            search,
+            matches: None,
+            match_mask: None,
+            match_ix: 0,
+            search_gen: 0,
+            placeholder_locale: "",
+            focus,
+            list_focus,
+            toast: None,
+            about: false,
+            logo: Arc::new(Image::from_bytes(ImageFormat::Png, crate::ICON_PNG.to_vec())),
+            _subs: subs,
+        };
+        if let Some(p) = initial {
+            this.open(p, window, cx);
+        }
+        this
+    }
+
+    pub fn open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.load_gen += 1;
+        let load_gen = self.load_gen;
+        self.phase = Phase::Loading { path: path.clone(), started: Instant::now() };
+        let p = path.clone();
+        let task = cx.background_executor().spawn(async move {
+            let repo = Repo::discover(&p)?;
+            let history = repo.history(HISTORY_LIMIT)?;
+            Ok::<_, repo::Error>((repo, history))
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let res = task.await;
+            this.update_in(cx, |this, window, cx| {
+                if this.load_gen != load_gen {
+                    return;
+                }
+                match res {
+                    Ok((repo, history)) => this.loaded(repo, history, window, cx),
+                    Err(e) => this.phase = Phase::Failed { path, message: open_error(&e) },
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        // keep the elapsed counter moving
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(200)).await;
+                let loading = this.update(cx, |this, cx| {
+                    let l = this.load_gen == load_gen && matches!(this.phase, Phase::Loading { .. });
+                    if l {
+                        cx.notify();
+                    }
+                    l
+                });
+                if !matches!(loading, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn loaded(&mut self, repo: Repo, history: History, window: &mut Window, cx: &mut Context<Self>) {
+        let root = repo.root();
+        crate::settings::add_recent(&root);
+        self.recent = crate::settings::recent();
+        window.set_window_title(&format!("{} — {}", repo.name(), crate::APP_NAME));
+        let mut by_row: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (i, r) in history.refs.iter().enumerate() {
+            if let Some(&row) = history.index.get(&r.target) {
+                by_row.entry(row).or_default().push(i);
+            }
+        }
+        // big remote lists start folded so local branches stay in view
+        let remotes = history.refs.iter().filter(|r| r.kind == RefKind::Remote).count();
+        self.collapsed = if remotes > 40 { HashSet::from([RefKind::Remote]) } else { HashSet::new() };
+        let keep = self.selected_id().filter(|_| self.repo.as_ref().is_some_and(|r| r.root() == root));
+        self.refs_by_row = Rc::new(by_row);
+        self.repo = Some(repo);
+        let head_row = history.head.and_then(|h| history.index.get(&h).copied());
+        let sel = keep.and_then(|id| history.index.get(&id).copied()).or(head_row).or((!history.commits.is_empty()).then_some(0));
+        self.history = Some(Arc::new(history));
+        self.phase = Phase::Ready;
+        self.list_focus.focus(window, cx);
+        self.run_search(cx);
+        self.diff = None;
+        self.details = None;
+        self.selected = None;
+        if let Some(r) = sel {
+            self.select(r, true, cx);
+        }
+    }
+
+    fn selected_id(&self) -> Option<Oid> {
+        Some(self.history.as_ref()?.commits.get(self.selected?)?.id)
+    }
+
+    pub fn open_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some(i18n::t!("app.start.open_prompt").into()) });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = rx.await
+                && let Some(p) = paths.into_iter().next()
+            {
+                this.update_in(cx, |this, window, cx| this.open(p, window, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
+    fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = match (&self.phase, &self.repo) {
+            (Phase::Failed { path, .. }, _) => path.clone(),
+            (_, Some(r)) => r.root(),
+            _ => return,
+        };
+        self.open(path, window, cx);
+    }
+
+    pub fn toast(&mut self, text: String, cx: &mut Context<Self>) {
+        let at = Instant::now();
+        self.toast = Some((text, at));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TOAST_FOR).await;
+            this.update(cx, |this, cx| {
+                if this.toast.as_ref().is_some_and(|(_, t)| *t == at) {
+                    this.toast = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Select a commit row and load its message and changed files in the background.
+    pub fn select(&mut self, row: usize, scroll: bool, cx: &mut Context<Self>) {
+        let (Some(h), Some(repo)) = (&self.history, &self.repo) else { return };
+        let Some(c) = h.commits.get(row) else { return };
+        if scroll {
+            self.list_scroll.scroll_to_item(row, ScrollStrategy::Center);
+        }
+        if self.selected == Some(row) {
+            return;
+        }
+        self.selected = Some(row);
+        self.diff = None;
+        let id = c.id;
+        self.details = Some(Details { id, message: None, changes: None });
+        let repo = repo.clone();
+        let task = cx.background_executor().spawn(async move {
+            let msg = repo.message(id).map_err(|e| e.to_string());
+            let changes = repo.changes(id).map_err(|e| e.to_string());
+            (msg, changes)
+        });
+        cx.spawn(async move |this, cx| {
+            let (msg, changes) = task.await;
+            this.update(cx, |this, cx| {
+                if let Some(d) = this.details.as_mut().filter(|d| d.id == id) {
+                    d.message = Some(msg.unwrap_or_default());
+                    d.changes = Some(changes.map(Rc::new));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub fn select_id(&mut self, id: Oid, cx: &mut Context<Self>) {
+        match self.history.as_ref().and_then(|h| h.index.get(&id).copied()) {
+            Some(row) => self.select(row, true, cx),
+            None => self.toast(i18n::t!("app.toast.not_loaded"), cx),
+        }
+    }
+
+    fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if self.diff.is_some() {
+            return;
+        }
+        let Some(h) = &self.history else { return };
+        let n = h.commits.len() as isize;
+        if n == 0 {
+            return;
+        }
+        let cur = self.selected.map(|s| s as isize).unwrap_or(-1);
+        let next = (cur + delta).clamp(0, n - 1) as usize;
+        self.select(next, true, cx);
+    }
+
+    fn query(&self, cx: &App) -> String {
+        self.search.read(cx).value().to_string()
+    }
+
+    /// Re-run the search in the background; results land only if nothing newer was typed.
+    fn run_search(&mut self, cx: &mut Context<Self>) {
+        self.search_gen += 1;
+        let search_gen = self.search_gen;
+        let query = self.query(cx);
+        let Some(h) = self.history.clone().filter(|_| !query.trim().is_empty()) else {
+            if self.matches.take().is_some() {
+                self.match_mask = None;
+                cx.notify();
+            }
+            return;
+        };
+        let task = cx.background_executor().spawn(async move { h.search(&query) });
+        cx.spawn(async move |this, cx| {
+            let rows = task.await;
+            this.update(cx, |this, cx| {
+                if this.search_gen != search_gen {
+                    return;
+                }
+                let n = this.history.as_ref().map(|h| h.commits.len()).unwrap_or(0);
+                let mut mask = vec![false; n];
+                rows.iter().for_each(|&r| mask[r] = true);
+                // jump to the first match at or below the current selection
+                let from = this.selected.unwrap_or(0);
+                this.match_ix = rows.iter().position(|&r| r >= from).unwrap_or(0);
+                let first = rows.get(this.match_ix).copied();
+                this.matches = Some(Arc::new(rows));
+                this.match_mask = Some(Rc::new(mask));
+                if let Some(r) = first {
+                    this.select(r, true, cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Enter / Shift+Enter in the search field: next / previous match, wrapping around.
+    fn step_match(&mut self, delta: isize, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(m) = self.matches.clone().filter(|m| !m.is_empty()) else { return };
+        let n = m.len() as isize;
+        self.match_ix = (self.match_ix as isize + delta).rem_euclid(n) as usize;
+        self.diff = None;
+        self.select(m[self.match_ix], true, cx);
+        cx.notify();
+    }
+
+    fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.phase, Phase::Ready) {
+            self.search.update(cx, |s, cx| s.focus(window, cx));
+        }
+    }
+
+    /// Esc: close the About modal, else the diff, else clear the search and go back to the list.
+    fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.about {
+            self.about = false;
+            cx.notify();
+            return;
+        }
+        if self.diff.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if !self.query(cx).is_empty() {
+            self.search.update(cx, |s, cx| s.set_value("", window, cx));
+            self.run_search(cx);
+        }
+        self.list_focus.focus(window, cx);
+    }
+
+    /// The placeholder is stored text: rebuild it when the language changes.
+    fn sync_placeholder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let loc = i18n::locale();
+        if self.placeholder_locale != loc {
+            self.placeholder_locale = loc;
+            let text = i18n::t!("app.search.placeholder", keys = SEARCH_KEYS);
+            self.search.update(cx, |s, cx| s.set_placeholder(text, window, cx));
+        }
+    }
+
+    pub fn open_diff(&mut self, file: FileChange, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        self.diff = Some(DiffState { file: file.clone(), lines: None });
+        self.diff_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        let path = file.path.clone();
+        let task = cx.background_executor().spawn(async move { repo.diff(&file).map_err(|e| e.to_string()) });
+        cx.spawn(async move |this, cx| {
+            let res = task.await;
+            this.update(cx, |this, cx| {
+                if let Some(d) = this.diff.as_mut().filter(|d| d.file.path == path) {
+                    d.lines = Some(res.map(Rc::new));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub fn copy_sha(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected_id() {
+            cx.write_to_clipboard(ClipboardItem::new_string(id.to_string()));
+            self.toast(i18n::t!("app.toast.copied", sha = id.to_hex_with_len(7)), cx);
+        }
+    }
+
+    fn set_language(&mut self, code: &'static str, cx: &mut Context<Self>) {
+        if i18n::set_locale(code) {
+            let mut s = crate::settings::Settings::load();
+            s.language = Some(code.to_string());
+            s.save();
+            gpui_component::set_locale(code);
+            crate::set_app_menus(cx);
+            cx.refresh_windows();
+        }
+    }
+
+    // ── rendering ─────────────────────────────────────────────────────────────────────────────
+
+    fn render_topbar(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut left = div().flex().items_center().gap(px(10.)).min_w_0().flex_1();
+        left = left.child(div().flex().flex_none().items_center().justify_center().size(px(30.)).rounded(px(8.)).bg(t.brand).child(svg().path(crate::LOGO_SVG).size(px(17.)).text_color(gpui::white())));
+        match (&self.repo, &self.history, &self.phase) {
+            (Some(repo), Some(h), Phase::Ready) => {
+                let branch = h.head_branch.clone().unwrap_or_else(|| i18n::t!("app.topbar.detached", sha = h.head.map(|id| id.to_hex_with_len(7).to_string()).unwrap_or_default()));
+                let count = if h.truncated { i18n::t!("app.topbar.commits_truncated", n = group(h.commits.len())) } else { i18n::tn!("app.topbar.commits", h.commits.len(), count = group(h.commits.len())) };
+                left = left
+                    .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).truncate().child(repo.name()))
+                    .child(div().flex().flex_none().items_center().gap(px(5.)).px(px(9.)).py(px(3.)).rounded_full().bg(t.accent_soft).text_color(t.accent).text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(ui::branch_icon(12., t.accent)).child(branch))
+                    .child(div().flex_none().text_size(px(12.)).text_color(t.ink_muted).child(count));
+            }
+            _ => left = left.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(crate::APP_NAME)),
+        }
+        let can_reload = matches!(self.phase, Phase::Ready | Phase::Failed { .. });
+        let current = i18n::locale();
+        let weak = cx.entity().downgrade();
+        let lang = Button::new("lang").ghost().icon(IconName::Globe).with_size(px(34.)).tooltip(i18n::t!("common.language")).dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+            menu = menu.label(i18n::t!("common.language"));
+            for (code, name) in i18n::available() {
+                let w = weak.clone();
+                menu = menu.item(PopupMenuItem::new(name).checked(code == current).on_click(move |_, _, cx| {
+                    w.update(cx, |this, cx| this.set_language(code, cx)).ok();
+                }));
+            }
+            let w = weak.clone();
+            menu.separator().item(PopupMenuItem::new(i18n::t!("app.about.menu", app = crate::APP_NAME)).on_click(move |_, _, cx| {
+                w.update(cx, |this, cx| this.show_about(cx)).ok();
+            }))
+        });
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(8.))
+            .h(px(52.))
+            .px(px(12.))
+            .border_b_1()
+            .border_color(t.border)
+            .bg(t.surface)
+            .child(left)
+            .when(matches!(self.phase, Phase::Ready), |d| d.child(self.render_search(t, cx)))
+            .child(ui::icon_button(t, "reload", IconName::Redo, can_reload).when(can_reload, |d| d.on_click(cx.listener(|this, _, window, cx| this.reload(window, cx)))))
+            .child(ui::outline_button(t, "open").child(icon(IconName::FolderOpen, 15., t.ink)).child(i18n::t!("app.topbar.open")).on_click(cx.listener(|this, _, window, cx| this.open_dialog(window, cx))))
+            .child(lang)
+    }
+
+    fn render_search(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
+        let count = self.matches.as_ref().map(|m| {
+            if m.is_empty() {
+                (i18n::t!("app.search.none"), t.danger)
+            } else {
+                (i18n::t!("app.search.count", i = group(self.match_ix + 1), n = group(m.len())), t.ink_muted)
+            }
+        });
+        let nav = |id: &'static str, ic: IconName, delta: isize| {
+            ui::icon_button(t, id, ic, true).size(px(24.)).on_click(cx.listener(move |this, _, window, cx| this.step_match(delta, window, cx)))
+        };
+        let has = self.matches.as_ref().is_some_and(|m| !m.is_empty());
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(6.))
+            .w(px(380.))
+            .h(px(34.))
+            .pl(px(10.))
+            .pr(px(4.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(t.border)
+            .bg(t.canvas)
+            .child(icon(IconName::Search, 14., t.ink_muted))
+            .child(div().flex_1().min_w_0().text_size(px(13.)).child(Input::new(&self.search).appearance(false).small()))
+            .children(count.map(|(text, color)| div().flex_none().text_size(px(11.)).text_color(color).child(text)))
+            .when(has, |d| d.child(nav("match-prev", IconName::ChevronUp, -1)).child(nav("match-next", IconName::ChevronDown, 1)))
+    }
+
+    fn render_start(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
+        let recent = self.recent.iter().enumerate().map(|(i, p)| {
+            let p2 = p.clone();
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string());
+            let hover = t.canvas;
+            div()
+                .id(("recent", i))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .px(px(12.))
+                .py(px(8.))
+                .rounded(px(10.))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(icon(IconName::Folder, 15., t.ink_muted))
+                .child(div().flex().flex_col().min_w_0().child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(name)).child(div().text_size(px(11.)).text_color(t.ink_muted).truncate().child(p.display().to_string())))
+                .on_click(cx.listener(move |this, _, window, cx| this.open(p2.clone(), window, cx)))
+        });
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(22.))
+            .size_full()
+            .child(img(self.logo.clone()).size(px(112.)))
+            .child(div().flex().flex_col().items_center().gap(px(6.)).child(div().text_size(px(26.)).font_weight(FontWeight::SEMIBOLD).child(i18n::t!("app.start.title"))).child(div().max_w(px(520.)).text_center().text_size(px(14.)).text_color(t.ink_muted).child(i18n::t!("app.start.subtitle"))))
+            .child(ui::filled_button(t, "open-big", t.accent).child(icon(IconName::FolderOpen, 15., t.on_fill())).child(i18n::t!("app.start.open")).on_click(cx.listener(|this, _, window, cx| this.open_dialog(window, cx))))
+            .when(!self.recent.is_empty(), |d| d.child(div().flex().flex_col().w(px(420.)).gap(px(2.)).child(div().px(px(12.)).pb(px(4.)).child(ui::section_title(t, i18n::t!("app.start.recent")))).children(recent)))
+
+    }
+
+    fn render_loading(&self, t: &Tokens, path: &std::path::Path, started: Instant) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(10.))
+            .size_full()
+            .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child(i18n::t!("app.loading.title")))
+            .child(div().text_size(px(13.)).text_color(t.ink_muted).child(path.display().to_string()))
+            .child(div().text_size(px(12.)).text_color(t.ink_muted).child(format!("{:.1} s", started.elapsed().as_secs_f32())))
+    }
+
+    fn render_failed(&self, t: &Tokens, path: &std::path::Path, message: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(14.))
+            .size_full()
+            .child(icon(IconName::TriangleAlert, 32., t.danger))
+            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(i18n::t!("app.error.title")))
+            .child(div().text_size(px(13.)).text_color(t.ink_muted).child(path.display().to_string()))
+            .child(div().max_w(px(520.)).text_center().text_size(px(13.)).child(message.to_string()))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(ui::outline_button(t, "back").child(i18n::t!("app.error.back")).on_click(cx.listener(|this, _, window, cx| {
+                        this.phase = if this.history.is_some() { Phase::Ready } else { Phase::Start };
+                        if this.history.is_none() {
+                            window.set_window_title(crate::APP_NAME);
+                        }
+                        cx.notify();
+                    })))
+                    .child(ui::filled_button(t, "choose", t.accent).child(i18n::t!("app.start.open")).on_click(cx.listener(|this, _, window, cx| this.open_dialog(window, cx)))),
+            )
+    }
+
+    pub fn show_about(&mut self, cx: &mut Context<Self>) {
+        self.about = true;
+        cx.notify();
+    }
+
+    /// Slim bar at the bottom of every screen: where you are on the left, About on the right.
+    fn render_footer(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
+        let left = match (&self.repo, &self.phase) {
+            (Some(r), Phase::Ready) => r.root().display().to_string(),
+            _ => String::new(),
+        };
+        let ink = t.ink;
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(12.))
+            .h(px(26.))
+            .px(px(12.))
+            .border_t_1()
+            .border_color(t.border)
+            .bg(t.surface)
+            .text_size(px(11.))
+            .text_color(t.ink_muted)
+            .child(div().flex_1().min_w_0().truncate().child(left))
+            .child(
+                div()
+                    .id("footer-about")
+                    .flex_none()
+                    .cursor_pointer()
+                    .hover(move |s| s.text_color(ink).underline())
+                    .child(i18n::t!("app.about.footer", app = crate::APP_NAME, version = crate::VERSION, company = crate::COMPANY))
+                    .on_click(cx.listener(|this, _, _, cx| this.show_about(cx))),
+            )
+    }
+
+    fn render_about(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
+        let accent = t.accent;
+        let card = div()
+            .id("about-card")
+            .relative()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(12.))
+            .w(px(420.))
+            .px(px(32.))
+            .pt(px(32.))
+            .pb(px(26.))
+            .rounded(px(18.))
+            .border_1()
+            .border_color(t.border)
+            .bg(t.surface)
+            .shadow_lg()
+            // clicks inside the card must not reach the backdrop
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(div().absolute().top(px(10.)).right(px(10.)).child(ui::icon_button(t, "about-close", IconName::Close, true).on_click(cx.listener(|this, _, _, cx| {
+                this.about = false;
+                cx.notify();
+            }))))
+            .child(img(self.logo.clone()).size(px(88.)))
+            .child(div().flex().items_baseline().gap(px(8.)).child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(crate::APP_NAME)).child(div().text_size(px(13.)).text_color(t.ink_muted).child(crate::VERSION)))
+            .child(div().text_center().text_size(px(13.)).line_height(px(19.)).text_color(t.ink_muted).child(i18n::t!("app.about.description")))
+            .child(div().w_full().h(px(1.)).my(px(4.)).bg(t.border))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(2.))
+                    .child(div().text_size(px(13.)).child(i18n::t!("app.about.by", company = crate::COMPANY)))
+                    .child(div().text_size(px(12.)).text_color(t.ink_muted).child(i18n::t!("app.about.place"))),
+            )
+            .child(ui::filled_button(t, "about-site", t.accent).mt(px(4.)).child(i18n::t!("app.about.visit")).on_click(|_, _, cx| cx.open_url(crate::COMPANY_URL)))
+            .child(div().id("about-source").text_size(px(12.)).text_color(accent).cursor_pointer().hover(|s| s.underline()).child(i18n::t!("app.about.source")).on_click(|_, _, cx| cx.open_url(crate::REPO_URL)))
+            .child(div().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.about.license")));
+        div()
+            .id("about-backdrop")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(if t.dark { 0.55 } else { 0.32 }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.about = false;
+                    cx.notify();
+                }),
+            )
+            .child(card)
+    }
+
+    fn render_toast(&self, t: &Tokens) -> Option<impl IntoElement> {
+        let (text, _) = self.toast.as_ref()?;
+        Some(div().absolute().bottom(px(32.)).left_0().right_0().flex().justify_center().child(div().px(px(16.)).py(px(10.)).rounded(px(12.)).bg(t.ink).text_color(t.on_fill()).text_size(px(13.)).child(text.clone())))
+    }
+}
+
+impl Render for RamaApp {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_placeholder(window, cx);
+        let t = tokens(cx);
+        let body: AnyElement = match &self.phase {
+            Phase::Start => self.render_start(&t, cx).into_any_element(),
+            Phase::Loading { path, started } => {
+                let (path, started) = (path.clone(), *started);
+                self.render_loading(&t, &path, started).into_any_element()
+            }
+            Phase::Failed { path, message } => {
+                let (path, message) = (path.clone(), message.clone());
+                self.render_failed(&t, &path, &message, cx).into_any_element()
+            }
+            Phase::Ready => {
+                let center = if self.diff.is_some() { self.render_diff(&t, cx).into_any_element() } else { self.render_graph(&t, window, cx).into_any_element() };
+                div()
+                    .key_context(LIST_CONTEXT)
+                    .track_focus(&self.list_focus)
+                    .flex()
+                    .size_full()
+                    .min_h_0()
+                    .child(self.render_sidebar(&t, cx))
+                    .child(div().flex_1().min_w_0().h_full().child(center))
+                    .child(self.render_detail(&t, cx))
+                    .into_any_element()
+            }
+        };
+        div()
+            .key_context(CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &OpenRepo, window, cx| this.open_dialog(window, cx)))
+            .on_action(cx.listener(|this, _: &Reload, window, cx| this.reload(window, cx)))
+            .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.step(-1, cx)))
+            .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.step(1, cx)))
+            .on_action(cx.listener(|this, _: &CloseDiff, window, cx| this.escape(window, cx)))
+            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
+            .on_action(cx.listener(|this, _: &ShowAbout, _, cx| this.show_about(cx)))
+            .on_action(cx.listener(|this, _: &CopySha, _, cx| this.copy_sha(cx)))
+            .relative()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(t.canvas)
+            .text_color(t.ink)
+            .font_family(SANS)
+            .child(self.render_topbar(&t, cx))
+            .child(div().flex_1().min_h_0().child(body))
+            .child(self.render_footer(&t, cx))
+            .children(self.render_toast(&t))
+            .when(self.about, |d| d.child(self.render_about(&t, cx)))
+    }
+}
+
+/// Not-a-repository is the common case; anything else shows the library's own message.
+fn open_error(e: &repo::Error) -> String {
+    let s = e.to_string();
+    if s.contains("Could not find a git repository") || s.contains("not a git repository") {
+        i18n::t!("app.error.not_repo")
+    } else {
+        i18n::t!("app.error.other", detail = s)
+    }
+}
