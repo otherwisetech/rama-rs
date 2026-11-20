@@ -39,13 +39,25 @@ impl RamaApp {
         self.work.job.is_some() || self.work.git_missing
     }
 
-    /// The pinned row above the commit list while the working copy has changes.
+    /// Files with local changes (a file both staged and changed counts once).
+    pub(crate) fn change_count(&self) -> usize {
+        let Some(s) = &self.work.status else { return 0 };
+        let mut paths: std::collections::HashSet<&str> = s.staged.iter().map(|f| f.path.as_str()).collect();
+        paths.extend(s.unstaged.iter().map(|f| f.path.as_str()));
+        paths.len()
+    }
+
+    /// The working copy, pinned above the commit list (always there, so committing is never
+    /// hidden: "No local changes" when clean).
     pub(crate) fn render_wip_row(&self, t: &Tokens, x: f32, color: Hsla, graph_w: f32, refs_w: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let s = self.work.status.as_ref().filter(|s| !s.is_clean() || self.work.wip)?;
+        let s = self.work.status.as_ref()?;
         let selected = self.work.wip;
         let hover = if t.dark { t.border } else { t.canvas };
         let row_h = crate::graph_view::ROW_H;
-        let counts = i18n::t!("app.wip.counts", staged = s.staged.len(), unstaged = s.unstaged.len());
+        let n = self.change_count();
+        let clean = s.is_clean();
+        let counts = if clean { i18n::t!("app.wip.clean") } else { format!("{} · {}", i18n::tn!("app.wip.changes", n), i18n::tn!("app.wip.staged", s.staged.len())) }; // i18n-ok: separator
+        let color = if clean { t.border_strong } else { color };
         let graph = div()
             .relative()
             .flex_none()
@@ -69,8 +81,9 @@ impl RamaApp {
                 .when(!selected, |d| d.hover(move |s| s.bg(hover)))
                 .child(div().flex_none().w(px(refs_w)))
                 .child(graph)
-                .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(i18n::t!("app.wip.title")))
-                .child(div().flex_none().text_size(px(12.)).text_color(t.ink_muted).child(counts))
+                .child(div().flex_none().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).when(clean, |d| d.text_color(t.ink_muted)).child(i18n::t!("app.wip.title")))
+                .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(if clean { t.ink_muted } else { t.accent }).child(counts))
+                .when(!clean, |d| d.child(div().flex_none().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.wip.open_hint"))))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.list_focus.focus(window, cx);
                     this.select_wip(cx);
@@ -435,26 +448,110 @@ impl RamaApp {
         div().flex().flex_col().flex_none().h(px(OUTPUT_H)).bg(t.canvas).child(bar).child(body).into_any_element()
     }
 
+    /// Top bar: Changes (with the changed-file count) and explicit Fetch / Pull / Push with the
+    /// current branch's ahead / behind counts; a spinner on the one running.
     pub(crate) fn render_remote_buttons(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
         let enabled = !self.busy() && self.repo.is_some();
-        let (ahead, behind) = self.work.status.as_ref().map(|s| (s.branch.ahead, s.branch.behind)).unwrap_or((0, 0));
-        let button = |id: &'static str, ic: IconName, tip: String, count: u32, op: Op| {
-            let b = ui::icon_button(t, id, ic, enabled).w_auto().min_w(px(34.)).px(px(8.)).gap(px(3.)).tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx)).when(count > 0, |d| d.child(div().text_size(px(11.)).text_color(t.ink_muted).child(count.to_string())));
-            b.when(enabled, |d| d.on_click(cx.listener(move |this, _, _, cx| this.run_op(op.clone(), cx))))
+        let branch = self.work.status.as_ref().map(|s| s.branch.clone()).unwrap_or_default();
+        let running = self.work.job.as_ref().map(|j| match j.op {
+            Op::Fetch => 0,
+            Op::Pull | Op::PullFf { .. } => 1,
+            Op::Push(_) => 2,
+            _ => 3,
+        });
+        let publish = branch.head.is_some() && branch.upstream.is_none();
+        let button = |id: &'static str, which: u8, ic: IconName, label: String, tip: String, count: Option<String>| {
+            let spinning = running == Some(which);
+            ui::outline_button(t, id)
+                .h(px(32.))
+                .px(px(10.))
+                .gap(px(6.))
+                .text_size(px(12.5))
+                .when(spinning, |d| d.child(Spinner::new().small().color(t.accent)))
+                .when(!spinning, |d| d.child(icon(ic, 14., if enabled { t.ink } else { t.ink_muted })))
+                .child(label)
+                .children(count.map(|c| div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(t.accent).child(c)))
+                .when(!enabled, |d| d.opacity(0.55).cursor_default())
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         };
+        let n = self.change_count();
+        let wip_on = self.work.wip;
+        let changes = ui::outline_button(t, "changes")
+            .h(px(32.))
+            .px(px(10.))
+            .gap(px(6.))
+            .text_size(px(12.5))
+            .when(wip_on, |d| d.border_color(t.accent).bg(t.accent_soft))
+            .child(icon(IconName::File, 14., t.ink))
+            .child(i18n::t!("app.topbar.changes"))
+            .child(div().min_w(px(18.)).h(px(18.)).px(px(5.)).rounded_full().flex().items_center().justify_center().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).when(n > 0, |d| d.bg(t.accent).text_color(t.on_fill())).when(n == 0, |d| d.bg(t.canvas).text_color(t.ink_muted)).child(crate::util::group(n)))
+            .tooltip(|window, cx| Tooltip::new(i18n::t!("app.topbar.changes_tip")).build(window, cx))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.list_focus.focus(window, cx);
+                this.select_wip(cx);
+            }));
+        let behind = (branch.behind > 0).then(|| format!("↓{}", branch.behind)); // i18n-ok: arrows
+        let ahead = (branch.ahead > 0).then(|| format!("↑{}", branch.ahead)); // i18n-ok: arrows
+        let (push_label, push_tip) = if publish { (i18n::t!("app.git.publish"), i18n::t!("app.git.publish_tip")) } else { (i18n::t!("app.git.push_label"), i18n::t!("app.git.push")) };
         div()
             .flex()
             .flex_none()
             .items_center()
-            .child(button("fetch", IconName::Network, i18n::t!("app.git.fetch"), 0, Op::Fetch))
-            .child(button("pull", IconName::ArrowDown, i18n::t!("app.git.pull"), behind, Op::Pull))
-            .child(button("push", IconName::ArrowUp, i18n::t!("app.git.push"), ahead, Op::Push))
+            .gap(px(6.))
+            .child(changes)
+            .child(div().w(px(1.)).h(px(20.)).mx(px(2.)).bg(t.border))
+            .child(button("fetch", 0, IconName::Network, i18n::t!("app.git.fetch_label"), i18n::t!("app.git.fetch"), None).when(enabled, |d| d.on_click(cx.listener(|this, _, _, cx| this.run_op(Op::Fetch, cx)))))
+            .child(button("pull", 1, IconName::ArrowDown, i18n::t!("app.git.pull_label"), i18n::t!("app.git.pull"), behind).when(enabled, |d| d.on_click(cx.listener(|this, _, _, cx| this.run_op(Op::Pull, cx)))))
+            .child(button("push", 2, IconName::ArrowUp, push_label, push_tip, ahead).when(enabled, |d| d.on_click(cx.listener(|this, _, _, cx| this.push_head(cx)))))
+    }
+
+    /// A failed fetch / pull / push / branch operation: git's (and the hook's) last lines.
+    pub(crate) fn render_op_failure(&self, t: &Tokens, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let f = self.work.op_failure.as_ref()?;
+        let title = match &f.hook {
+            Some(h) => i18n::t!("app.git.op_hook_failed", hook = h, command = f.command),
+            None => i18n::t!("app.git.op_failed", command = f.command),
+        };
+        let lines: Vec<&str> = f.output.lines().filter(|l| !l.trim().is_empty()).collect();
+        let tail = lines[lines.len().saturating_sub(FAILURE_LINES / 2)..].join("\n");
+        let accent = t.accent;
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .gap(px(6.))
+                .m(px(8.))
+                .p(px(10.))
+                .rounded(px(8.))
+                .bg(t.danger.opacity(0.08))
+                .border_1()
+                .border_color(t.danger.opacity(0.45))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(icon(IconName::TriangleAlert, 14., t.danger))
+                        .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(t.danger).child(title))
+                        .child(div().id("show-op-output").flex_none().text_size(px(12.)).text_color(accent).cursor_pointer().hover(|s| s.underline()).child(i18n::t!("app.git.show_output")).on_click(cx.listener(|this, _, _, cx| {
+                            this.work.output_open = true;
+                            cx.notify();
+                        })))
+                        .child(small_button(t, "dismiss-op-failure", IconName::Close, i18n::t!("app.git.dismiss"), true).on_click(cx.listener(|this, _, _, cx| {
+                            this.work.op_failure = None;
+                            cx.notify();
+                        }))),
+                )
+                .when(!tail.trim().is_empty(), |d| d.child(div().id("op-failure-output").max_h(px(120.)).overflow_y_scroll().p(px(8.)).rounded(px(6.)).bg(t.canvas).font_family(MONO).text_size(px(11.)).line_height(px(15.)).child(tail)))
+                .into_any_element(),
+        )
     }
 
     /// Confirmation or input modal, over everything.
     pub(crate) fn render_modal(&self, t: &Tokens, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (title, body, ok_label, danger, input): (String, Option<String>, String, bool, Option<AnyElement>) = if let Some(c) = &self.work.confirm {
-            match c {
+        let (title, body, ok_label, danger, input, ready): (String, Option<String>, String, bool, Option<AnyElement>, bool) = if let Some(c) = &self.work.confirm {
+            let (title, body, ok, danger, input) = match c {
                 Confirm::Discard(files) => {
                     let body = match files.as_slice() {
                         [one] => i18n::t!("app.confirm.discard_one", path = one.path),
@@ -465,39 +562,59 @@ impl RamaApp {
                     (i18n::t!("app.confirm.discard_title"), Some(body), i18n::t!("app.confirm.discard_ok"), true, None)
                 }
                 Confirm::DropStash(i) => (i18n::t!("app.confirm.drop_title", name = format!("stash@{{{i}}}")), Some(i18n::t!("app.confirm.drop_body")), i18n::t!("app.stash.drop"), true, None),
-                Confirm::DeleteBranch(b) => (i18n::t!("app.confirm.delete_title", name = b), Some(i18n::t!("app.confirm.delete_body")), i18n::t!("app.confirm.delete_ok"), true, None),
+                Confirm::DeleteBranch { name, merged: true } => (i18n::t!("app.confirm.delete_title", name = name), Some(i18n::t!("app.confirm.delete_body")), i18n::t!("app.confirm.delete_ok"), true, None),
+                Confirm::DeleteBranch { name, merged: false } => (i18n::t!("app.confirm.delete_title", name = name), Some(i18n::t!("app.confirm.unmerged_body", name = name)), i18n::t!("app.confirm.force_next"), true, None),
+                Confirm::ForceDeleteBranch(name) => (i18n::t!("app.confirm.force_title", name = name), Some(i18n::t!("app.confirm.force_body", name = name)), i18n::t!("app.confirm.force_ok"), true, None),
+                Confirm::SetUpstream(args) => (i18n::t!("app.confirm.upstream_title"), Some(i18n::t!("app.confirm.upstream_body", command = format!("git {}", args.join(" ")))), i18n::t!("app.git.publish"), false, None), // i18n-ok: command line
                 Confirm::NoVerify => (i18n::t!("app.confirm.no_verify_title"), Some(i18n::t!("app.confirm.no_verify_body")), i18n::t!("app.confirm.no_verify_ok"), true, None),
-            }
+            };
+            (title, body, ok, danger, input, true)
         } else if let Some(p) = &self.work.prompt {
-            let (title, ok, option) = match p.kind {
+            let (title, ok, option) = match &p.kind {
                 PromptKind::NewBranch(at) => (
                     i18n::t!("app.prompt.branch_title", sha = at.to_hex_with_len(7)),
                     i18n::t!("app.prompt.branch_ok"),
-                    Checkbox::new("prompt-checkout").small().label(i18n::t!("app.prompt.branch_checkout")).checked(p.checkout).on_click(cx.listener(|this, on: &bool, _, cx| {
+                    Some(Checkbox::new("prompt-checkout").small().label(i18n::t!("app.prompt.branch_checkout")).checked(p.checkout).on_click(cx.listener(|this, on: &bool, _, cx| {
                         if let Some(p) = this.work.prompt.as_mut() {
                             p.checkout = *on;
                         }
                         cx.notify();
-                    })),
+                    }))),
                 ),
                 PromptKind::Stash => (
                     i18n::t!("app.prompt.stash_title"),
                     i18n::t!("app.stash.button"),
-                    Checkbox::new("prompt-untracked").small().label(i18n::t!("app.prompt.stash_untracked")).checked(p.untracked).on_click(cx.listener(|this, on: &bool, _, cx| {
+                    Some(Checkbox::new("prompt-untracked").small().label(i18n::t!("app.prompt.stash_untracked")).checked(p.untracked).on_click(cx.listener(|this, on: &bool, _, cx| {
                         if let Some(p) = this.work.prompt.as_mut() {
                             p.untracked = *on;
                         }
                         cx.notify();
-                    })),
+                    }))),
                 ),
+                PromptKind::RenameBranch(old) => (i18n::t!("app.prompt.rename_title", name = old), i18n::t!("app.prompt.rename_ok"), None),
+                PromptKind::DeleteRemote { .. } => (String::new(), String::new(), None),
             };
-            let input = div().flex().flex_col().gap(px(10.)).child(Input::new(&p.input)).child(div().text_size(px(12.)).child(option)).into_any_element();
-            (title, None, ok, false, Some(input))
+            if let PromptKind::DeleteRemote { name, branch, args } = &p.kind {
+                let typed = p.input.read(cx).value().trim() == branch.as_str();
+                let body = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(div().text_size(px(13.)).line_height(px(19.)).text_color(t.ink_muted).child(i18n::t!("app.confirm.remote_body", branch = branch)))
+                    .child(div().p(px(8.)).rounded(px(6.)).bg(t.canvas).font_family(MONO).text_size(px(12.)).child(format!("git {}", args.join(" ")))) // i18n-ok: command line
+                    .child(div().text_size(px(12.)).child(i18n::t!("app.confirm.remote_type", branch = branch)))
+                    .child(Input::new(&p.input))
+                    .into_any_element();
+                (i18n::t!("app.confirm.remote_title", name = name), None, i18n::t!("app.confirm.remote_ok"), true, Some(body), typed)
+            } else {
+                let input = div().flex().flex_col().gap(px(10.)).child(Input::new(&p.input)).children(option.map(|o| div().text_size(px(12.)).child(o))).into_any_element();
+                (title, None, ok, false, Some(input), true)
+            }
         } else {
             return None;
         };
         let is_prompt = input.is_some();
-        let ok = ui::filled_button(t, "modal-ok", if danger { t.danger } else { t.accent }).child(ok_label).on_click(cx.listener(move |this, _, window, cx| {
+        let ok = ui::filled_button(t, "modal-ok", if danger { t.danger } else { t.accent }).child(ok_label).when(!ready, |d| d.opacity(0.4).cursor_default()).on_click(cx.listener(move |this, _, window, cx| {
             if is_prompt {
                 this.submit_prompt(window, cx);
             } else {

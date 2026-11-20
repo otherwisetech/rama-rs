@@ -4,6 +4,7 @@ use crate::app::RamaApp;
 use gpui::*;
 use gpui_component::input::{InputState, TextareaState};
 use repo::{Cancel, FileChange, Oid, Repo, Run, Stash, WorkFile, WorkStatus};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -32,9 +33,17 @@ pub enum Op {
     SwitchRemote(String),
     CreateBranch { name: String, at: Oid, checkout: bool },
     DeleteBranch(String),
+    /// `git branch -D`, only after the second confirmation.
+    ForceDeleteBranch(String),
+    RenameBranch { old: String, new: String },
+    /// `git push <remote> --delete <branch>`, as shown in the confirmation.
+    DeleteRemote(Vec<String>),
+    /// Fast-forward a local branch from its upstream.
+    PullFf { name: String, head: bool },
     Fetch,
     Pull,
-    Push,
+    /// `git push …` with the arguments the user saw (upstream included).
+    Push(Vec<String>),
 }
 
 impl Op {
@@ -55,10 +64,18 @@ impl Op {
             Op::SwitchRemote(b) => format!("git switch --track {b}"),       // i18n-ok
             Op::CreateBranch { name, checkout, .. } => if *checkout { format!("git switch -c {name}") } else { format!("git branch {name}") }, // i18n-ok
             Op::DeleteBranch(b) => format!("git branch -d {b}"),            // i18n-ok
+            Op::ForceDeleteBranch(b) => format!("git branch -D {b}"),       // i18n-ok
+            Op::RenameBranch { old, new } => format!("git branch -m {old} {new}"), // i18n-ok
+            Op::DeleteRemote(args) | Op::Push(args) => format!("git {}", args.join(" ")), // i18n-ok
+            Op::PullFf { name, .. } => format!("git pull --ff-only ({name})"), // i18n-ok
             Op::Fetch => "git fetch --all".into(),                          // i18n-ok
             Op::Pull => "git pull".into(),                                  // i18n-ok
-            Op::Push => "git push".into(),                                  // i18n-ok
         }
+    }
+
+    /// Network and hook-running ops stream their output while they run.
+    fn streams(&self) -> bool {
+        matches!(self, Op::Commit { .. } | Op::Fetch | Op::Pull | Op::PullFf { .. } | Op::Push(_) | Op::DeleteRemote(_))
     }
 
     /// Ops that leave history and refs alone only need a status refresh.
@@ -72,6 +89,7 @@ pub struct Job {
     pub cancel: Cancel,
     pub started: Instant,
     pub commit: bool,
+    pub op: Op,
     /// Streams output worth watching (commit hooks, fetch / pull / push).
     streams: bool,
 }
@@ -83,16 +101,30 @@ pub struct CommitFailure {
     pub output: String,
 }
 
+/// A failed non-commit operation, shown above the graph until dismissed or the next run.
+pub struct OpFailure {
+    pub command: String,
+    pub hook: Option<String>,
+    pub output: String,
+}
+
 pub enum Confirm {
     Discard(Vec<WorkFile>),
     DropStash(usize),
-    DeleteBranch(String),
+    /// `merged` decides between a plain delete and the path to a forced one.
+    DeleteBranch { name: String, merged: bool },
+    ForceDeleteBranch(String),
+    /// A push that will set the upstream: its full arguments.
+    SetUpstream(Vec<String>),
     NoVerify,
 }
 
 pub enum PromptKind {
     NewBranch(Oid),
     Stash,
+    RenameBranch(String),
+    /// Remote-tracking name (`origin/x`), the branch name to type, and the push arguments.
+    DeleteRemote { name: String, branch: String, args: Vec<String> },
 }
 
 pub struct Prompt {
@@ -116,6 +148,10 @@ pub struct Work {
     pub output_open: bool,
     pub output_scroll: UniformListScrollHandle,
     pub failure: Option<CommitFailure>,
+    pub op_failure: Option<OpFailure>,
+    /// Local branch → upstream (`origin/main`).
+    pub upstreams: Rc<HashMap<String, String>>,
+    pub remotes: Rc<Vec<String>>,
     pub confirm: Option<Confirm>,
     pub prompt: Option<Prompt>,
     pub git_missing: bool,
@@ -142,6 +178,9 @@ impl Work {
             output_open: false,
             output_scroll: UniformListScrollHandle::new(),
             failure: None,
+            op_failure: None,
+            upstreams: Rc::new(HashMap::new()),
+            remotes: Rc::new(Vec::new()),
             confirm: None,
             prompt: None,
             git_missing: false,
@@ -193,11 +232,17 @@ fn execute(repo: &Repo, op: &Op, cancel: &Cancel, log: &Arc<Mutex<Vec<String>>>)
         Op::SwitchRemote(b) => repo.switch_remote(b),
         Op::CreateBranch { name, at, checkout } => repo.create_branch(name, *at, *checkout),
         Op::DeleteBranch(b) => repo.delete_branch(b),
+        Op::ForceDeleteBranch(b) => repo.delete_branch_force(b),
+        Op::RenameBranch { old, new } => repo.rename_branch(old, new),
         Op::Fetch => repo.run(&["fetch", "--all", "--progress"], cancel, &mut sink),
         Op::Pull => repo.run(&["pull", "--no-edit", "--progress"], cancel, &mut sink),
-        Op::Push => {
-            let args = repo.push_args(&repo.status()?.branch)?;
+        Op::PullFf { name, head } => {
+            let args = repo.pull_ff_args(name, *head)?;
             push_log(log, &format!("$ git {}", args.join(" ")), false); // i18n-ok: command line
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            repo.run(&args, cancel, &mut sink)
+        }
+        Op::Push(args) | Op::DeleteRemote(args) => {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             repo.run(&args, cancel, &mut sink)
         }
@@ -245,11 +290,13 @@ impl RamaApp {
         let task = cx.background_executor().spawn(async move {
             let status = repo.status().ok();
             let stashes = repo.stashes().unwrap_or_default();
+            let upstreams = repo.upstreams().unwrap_or_default();
+            let remotes = repo.remotes().unwrap_or_default();
             let h = if history { repo.history(crate::app::HISTORY_LIMIT).ok() } else { None };
-            (status, stashes, h)
+            (status, stashes, upstreams, remotes, h)
         });
         cx.spawn(async move |this, cx| {
-            let (status, stashes, h) = task.await;
+            let (status, stashes, upstreams, remotes, h) = task.await;
             this.update(cx, |this, cx| {
                 if this.work.refresh_gen != generation {
                     return;
@@ -259,6 +306,8 @@ impl RamaApp {
                 }
                 this.work.status = status.map(Rc::new);
                 this.work.stashes = Rc::new(stashes);
+                this.work.upstreams = Rc::new(upstreams);
+                this.work.remotes = Rc::new(remotes);
                 if let Some(sv) = &this.work.stash
                     && !this.work.stashes.iter().any(|s| s.id == sv.stash.id)
                 {
@@ -356,8 +405,9 @@ impl RamaApp {
             self.work.failure = None;
         }
         let started = Instant::now();
-        let streams = matches!(op, Op::Commit { .. } | Op::Fetch | Op::Pull | Op::Push);
-        self.work.job = Some(Job { command, cancel: cancel.clone(), started, commit, streams });
+        let streams = op.streams();
+        self.work.op_failure = None;
+        self.work.job = Some(Job { command, cancel: cancel.clone(), started, commit, op: op.clone(), streams });
         let log = self.work.log.clone();
         let op2 = op.clone();
         let task = cx.background_executor().spawn(async move { execute(&repo, &op2, &cancel, &log).map_err(|e| e.to_string()) });
@@ -394,7 +444,7 @@ impl RamaApp {
         let (ok, cancelled, hook, output) = match res {
             Ok(run) => {
                 // quiet ops return their output at the end
-                if !matches!(op, Op::Commit { .. } | Op::Fetch | Op::Pull | Op::Push) {
+                if !op.streams() {
                     for l in run.output.lines() {
                         push_log(&log, l, false);
                     }
@@ -419,8 +469,11 @@ impl RamaApp {
                     self.toast(i18n::t!("app.git.committed"), cx);
                 }
                 Op::Fetch => self.toast(i18n::t!("app.git.fetched"), cx),
-                Op::Pull => self.toast(i18n::t!("app.git.pulled"), cx),
-                Op::Push => self.toast(i18n::t!("app.git.pushed"), cx),
+                Op::Pull | Op::PullFf { .. } => self.toast(i18n::t!("app.git.pulled"), cx),
+                Op::Push(_) => self.toast(i18n::t!("app.git.pushed"), cx),
+                Op::DeleteBranch(b) | Op::ForceDeleteBranch(b) => self.toast(i18n::t!("app.git.branch_deleted", name = b), cx),
+                Op::DeleteRemote(_) => self.toast(i18n::t!("app.git.remote_deleted"), cx),
+                Op::RenameBranch { new, .. } => self.toast(i18n::t!("app.git.renamed", name = new), cx),
                 Op::StashPush { .. } => self.toast(i18n::t!("app.git.stashed"), cx),
                 Op::Discard(_) => self.toast(i18n::t!("app.git.discarded"), cx),
                 _ => {}
@@ -433,6 +486,7 @@ impl RamaApp {
                 self.work.failure = Some(CommitFailure { hook: hook.clone(), output });
             } else {
                 self.work.output_open = true;
+                self.work.op_failure = Some(OpFailure { command: op.command(), hook: hook.clone(), output });
             }
             self.toast(match hook {
                 Some(h) => i18n::t!("app.git.hook_failed_toast", hook = h),
@@ -560,15 +614,20 @@ impl RamaApp {
     }
 
     pub fn open_prompt(&mut self, kind: PromptKind, window: &mut Window, cx: &mut Context<Self>) {
-        let placeholder = match kind {
-            PromptKind::NewBranch(_) => i18n::t!("app.prompt.branch_placeholder"),
-            PromptKind::Stash => i18n::t!("app.prompt.stash_placeholder"),
+        let (placeholder, value) = match &kind {
+            PromptKind::NewBranch(_) => (i18n::t!("app.prompt.branch_placeholder"), String::new()),
+            PromptKind::Stash => (i18n::t!("app.prompt.stash_placeholder"), String::new()),
+            PromptKind::RenameBranch(old) => (i18n::t!("app.prompt.branch_placeholder"), old.clone()),
+            PromptKind::DeleteRemote { branch, .. } => (branch.clone(), String::new()),
         };
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value));
         input.update(cx, |s, cx| s.focus(window, cx));
         let sub = cx.subscribe_in(&input, window, |this, _, ev: &gpui_component::input::InputEvent, window, cx| {
-            if let gpui_component::input::InputEvent::PressEnter { .. } = ev {
-                this.submit_prompt(window, cx);
+            match ev {
+                gpui_component::input::InputEvent::PressEnter { .. } => this.submit_prompt(window, cx),
+                // the delete-remote confirmation enables its button as the name is typed
+                gpui_component::input::InputEvent::Change => cx.notify(),
+                _ => {}
             }
         });
         self.prompt_sub = Some(sub);
@@ -588,6 +647,20 @@ impl RamaApp {
                 self.run_op(Op::CreateBranch { name: text, at, checkout: p.checkout }, cx);
             }
             PromptKind::Stash => self.run_op(Op::StashPush { message: text, untracked: p.untracked }, cx),
+            PromptKind::RenameBranch(old) => {
+                if text.is_empty() || text == old {
+                    self.work.prompt = Some(Prompt { kind: PromptKind::RenameBranch(old), ..p });
+                    return;
+                }
+                self.run_op(Op::RenameBranch { old, new: text }, cx);
+            }
+            PromptKind::DeleteRemote { name, branch, args } => {
+                if text != branch {
+                    self.work.prompt = Some(Prompt { kind: PromptKind::DeleteRemote { name, branch, args }, ..p });
+                    return;
+                }
+                self.run_op(Op::DeleteRemote(args), cx);
+            }
         }
         self.prompt_sub = None;
         cx.notify();
@@ -598,9 +671,68 @@ impl RamaApp {
         match c {
             Confirm::Discard(files) => self.run_op(Op::Discard(files), cx),
             Confirm::DropStash(i) => self.run_op(Op::StashDrop(i), cx),
-            Confirm::DeleteBranch(b) => self.run_op(Op::DeleteBranch(b), cx),
+            Confirm::DeleteBranch { name, merged: true } => self.run_op(Op::DeleteBranch(name), cx),
+            // not merged: a second, separate confirmation before -D
+            Confirm::DeleteBranch { name, merged: false } => self.work.confirm = Some(Confirm::ForceDeleteBranch(name)),
+            Confirm::ForceDeleteBranch(name) => self.run_op(Op::ForceDeleteBranch(name), cx),
+            Confirm::SetUpstream(args) => self.run_op(Op::Push(args), cx),
             Confirm::NoVerify => self.commit(true, cx),
         }
         cx.notify();
+    }
+
+    /// Push a branch: straight away when it has an upstream, after a confirmation showing the
+    /// command when the push will set one.
+    pub fn push_branch(&mut self, name: String, head: bool, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        let task = cx.background_executor().spawn(async move { repo.push_branch_args(&name, head).map_err(|e| e.to_string()) });
+        cx.spawn(async move |this, cx| {
+            let res = task.await;
+            this.update(cx, |this, cx| {
+                match res {
+                    Ok(args) if args.iter().any(|a| a == "--set-upstream") => this.work.confirm = Some(Confirm::SetUpstream(args)),
+                    Ok(args) => this.run_op(Op::Push(args), cx),
+                    Err(e) => this.toast(i18n::t!("app.git.no_remote", detail = e), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Top-bar Push: the checked-out branch.
+    pub fn push_head(&mut self, cx: &mut Context<Self>) {
+        match self.work.status.as_ref().and_then(|s| s.branch.head.clone()) {
+            Some(b) => self.push_branch(b, true, cx),
+            None => self.toast(i18n::t!("app.work.detached"), cx),
+        }
+    }
+
+    /// Ask before deleting a local branch; whether it is merged decides the wording and
+    /// whether a forced delete is offered.
+    pub fn ask_delete_branch(&mut self, name: String, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        let n = name.clone();
+        let task = cx.background_executor().spawn(async move { repo.branch_merged(&n) });
+        cx.spawn(async move |this, cx| {
+            let merged = task.await;
+            this.update(cx, |this, cx| {
+                this.work.confirm = Some(Confirm::DeleteBranch { name, merged });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Ask before deleting a branch on its remote; the user types the branch name.
+    pub fn ask_delete_remote(&mut self, remote_branch: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((remote, branch)) = repo::split_remote_name(&self.work.remotes, &remote_branch) else {
+            self.toast(i18n::t!("app.git.no_remote", detail = remote_branch), cx);
+            return;
+        };
+        let args = vec!["push".to_string(), remote, "--delete".to_string(), branch.clone()];
+        self.open_prompt(PromptKind::DeleteRemote { name: remote_branch, branch, args }, window, cx);
     }
 }

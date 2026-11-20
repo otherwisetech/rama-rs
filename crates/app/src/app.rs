@@ -23,11 +23,15 @@ pub(crate) const LIST_CONTEXT: &str = "CommitList";
 const SEARCH_KEYS: &str = "⌘F"; // i18n-ok: shortcut
 #[cfg(not(target_os = "macos"))]
 const SEARCH_KEYS: &str = "Ctrl+F"; // i18n-ok: shortcut
+#[cfg(target_os = "macos")]
+const FILTER_KEYS: &str = "⌘⇧F"; // i18n-ok: shortcut
+#[cfg(not(target_os = "macos"))]
+const FILTER_KEYS: &str = "Ctrl+Shift+F"; // i18n-ok: shortcut
 const TOAST_FOR: Duration = Duration::from_secs(4);
 /// Commits loaded per repository; enough for years of history in most projects.
 pub(crate) const HISTORY_LIMIT: usize = 50_000;
 
-actions!(rama, [OpenRepo, Reload, SelectPrev, SelectNext, CloseDiff, CopySha, FocusSearch, ShowAbout]);
+actions!(rama, [OpenRepo, Reload, SelectPrev, SelectNext, CloseDiff, CopySha, FocusSearch, FocusFilter, ShowAbout]);
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -40,6 +44,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-c", CopySha, Some(LIST_CONTEXT)),
         KeyBinding::new("escape", CloseDiff, Some(CONTEXT)),
         KeyBinding::new("secondary-f", FocusSearch, Some(CONTEXT)),
+        KeyBinding::new("secondary-shift-f", FocusFilter, Some(CONTEXT)),
+        // only while the list has focus, so "/" still types in text fields
+        KeyBinding::new("/", FocusFilter, Some(LIST_CONTEXT)),
     ]);
 }
 
@@ -79,8 +86,13 @@ pub struct RamaApp {
     pub selected: Option<usize>,
     pub details: Option<Details>,
     pub diff: Option<DiffState>,
-    pub collapsed: HashSet<RefKind>,
-    pub stashes_collapsed: bool,
+    pub collapsed: HashSet<crate::sidebar::Sec>,
+    /// Sections folded by hand while a filter is active; reset when the filter changes.
+    pub filter_collapsed: HashSet<crate::sidebar::Sec>,
+    pub side_search: Entity<InputState>,
+    /// Local branches by most recent commit instead of by name.
+    pub side_recent: bool,
+    pub(crate) side_cache: Option<crate::sidebar::SideCache>,
     pub list_scroll: UniformListScrollHandle,
     pub side_scroll: UniformListScrollHandle,
     pub diff_scroll: UniformListScrollHandle,
@@ -108,6 +120,7 @@ impl RamaApp {
     pub fn new(initial: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         sync_theme(Some(window), cx);
         let search = cx.new(|cx| InputState::new(window, cx));
+        let side_search = cx.new(|cx| InputState::new(window, cx));
         let message = cx.new(|cx| TextareaState::new(window, cx).auto_grow(3, 10));
         let subs = vec![
             cx.subscribe_in(&message, window, |this, _, ev: &InputEvent, window, cx| {
@@ -132,6 +145,15 @@ impl RamaApp {
                 InputEvent::PressEnter { shift, .. } => this.step_match(if *shift { -1 } else { 1 }, window, cx),
                 _ => {}
             }),
+            cx.subscribe_in(&side_search, window, |this, _, ev: &InputEvent, window, cx| match ev {
+                InputEvent::Change => {
+                    this.filter_collapsed.clear();
+                    this.side_scroll.scroll_to_item(0, ScrollStrategy::Top);
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => this.filter_enter(window, cx),
+                _ => {}
+            }),
         ];
         let focus = cx.focus_handle();
         let list_focus = cx.focus_handle();
@@ -146,7 +168,10 @@ impl RamaApp {
             details: None,
             diff: None,
             collapsed: HashSet::new(),
-            stashes_collapsed: false,
+            filter_collapsed: HashSet::new(),
+            side_search,
+            side_recent: crate::settings::Settings::load().side_recent(),
+            side_cache: None,
             list_scroll: UniformListScrollHandle::new(),
             side_scroll: UniformListScrollHandle::new(),
             diff_scroll: UniformListScrollHandle::new(),
@@ -226,7 +251,14 @@ impl RamaApp {
         let by_row = refs_by_row(&history);
         // big remote lists start folded so local branches stay in view
         let remotes = history.refs.iter().filter(|r| r.kind == RefKind::Remote).count();
-        self.collapsed = if remotes > 40 { HashSet::from([RefKind::Remote]) } else { HashSet::new() };
+        let tags = history.refs.iter().filter(|r| r.kind == RefKind::Tag).count();
+        self.collapsed = HashSet::new();
+        if remotes > 40 {
+            self.collapsed.insert(crate::sidebar::Sec::Remote);
+        }
+        if tags > 40 {
+            self.collapsed.insert(crate::sidebar::Sec::Tag);
+        }
         let same = self.repo.as_ref().is_some_and(|r| r.root() == root);
         let keep = self.selected_id().filter(|_| same);
         if !same {
@@ -372,7 +404,7 @@ impl RamaApp {
         }
         let Some(h) = &self.history else { return };
         let n = h.commits.len() as isize;
-        if self.selected == Some(0) && delta < 0 && self.work.dirty() {
+        if self.selected == Some(0) && delta < 0 && self.work.status.is_some() {
             self.select_wip(cx);
             return;
         }
@@ -436,6 +468,12 @@ impl RamaApp {
         cx.notify();
     }
 
+    fn focus_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.phase, Phase::Ready) {
+            self.side_search.update(cx, |s, cx| s.focus(window, cx));
+        }
+    }
+
     fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.phase, Phase::Ready) {
             self.search.update(cx, |s, cx| s.focus(window, cx));
@@ -450,6 +488,16 @@ impl RamaApp {
             self.work.prompt = None;
             self.prompt_sub = None;
             cx.notify();
+            return;
+        }
+        if self.side_search.read(cx).focus_handle(cx).is_focused(window) {
+            if !self.side_search.read(cx).value().is_empty() {
+                self.side_search.update(cx, |s, cx| s.set_value("", window, cx));
+                self.filter_collapsed.clear();
+                cx.notify();
+            } else {
+                self.list_focus.focus(window, cx);
+            }
             return;
         }
         if self.diff.take().is_some() {
@@ -470,6 +518,8 @@ impl RamaApp {
             self.placeholder_locale = loc;
             let text = i18n::t!("app.search.placeholder", keys = SEARCH_KEYS);
             self.search.update(cx, |s, cx| s.set_placeholder(text, window, cx));
+            let text = i18n::t!("app.side.filter_placeholder", keys = FILTER_KEYS);
+            self.side_search.update(cx, |s, cx| s.set_placeholder(text, window, cx));
             let text = i18n::t!("app.work.message_placeholder", keys = crate::work_view::COMMIT_KEYS);
             self.work.message.update(cx, |s, cx| s.set_placeholder(text, window, cx));
         }
@@ -582,7 +632,9 @@ impl RamaApp {
             .flex_none()
             .items_center()
             .gap(px(6.))
-            .w(px(380.))
+            .w(px(320.))
+            .flex_shrink_1()
+            .min_w(px(160.))
             .h(px(34.))
             .pl(px(10.))
             .pr(px(4.))
@@ -795,10 +847,12 @@ impl Render for RamaApp {
                     self.render_detail(&t, cx).into_any_element()
                 };
                 // j/k/↑/↓ belong to the list; the commit box on the right must get its letters
+                // the sidebar sits outside the list context: its filter field must get j / k / "/"
                 div()
                     .flex()
                     .size_full()
                     .min_h_0()
+                    .child(self.render_sidebar(&t, cx))
                     .child(
                         div()
                             .key_context(LIST_CONTEXT)
@@ -807,8 +861,7 @@ impl Render for RamaApp {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .child(self.render_sidebar(&t, cx))
-                            .child(div().flex().flex_col().flex_1().min_w_0().h_full().child(div().flex_1().min_h_0().child(center)).child(self.render_output(&t, cx))),
+                            .child(div().flex().flex_col().flex_1().min_w_0().h_full().children(self.render_op_failure(&t, cx)).child(div().flex_1().min_h_0().child(center)).child(self.render_output(&t, cx))),
                     )
                     .child(right)
                     .into_any_element()
@@ -823,6 +876,7 @@ impl Render for RamaApp {
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.step(1, cx)))
             .on_action(cx.listener(|this, _: &CloseDiff, window, cx| this.escape(window, cx)))
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
+            .on_action(cx.listener(|this, _: &FocusFilter, window, cx| this.focus_filter(window, cx)))
             .on_action(cx.listener(|this, _: &ShowAbout, _, cx| this.show_about(cx)))
             .on_action(cx.listener(|this, _: &CopySha, _, cx| this.copy_sha(cx)))
             .relative()

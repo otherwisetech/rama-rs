@@ -16,13 +16,18 @@ Linux. UI in Spanish, English, Portuguese and French.
   branch / remote / tag labels, and the checked-out branch highlighted.
 - Fast on big repositories: 60 000 commits and 20 000 refs load in under a second; lists are
   virtualised.
-- Sidebar with local branches, remote branches and tags; click one to jump to its commit.
+- Sidebar with local branches (the checked-out one pinned first, sorted by name or by latest
+  commit), remote branches, tags and stashes; click one to jump to its commit. A filter field on
+  top (⌘⇧F, or `/` from the list; Esc clears) narrows all of them as you type, ignoring case and
+  matching word starts too (`fe/lo` finds `feature/user-login`), with the matches highlighted and
+  counted per section. Instant with thousands of remote branches and tags.
 - Commit details: full message, author, date, parents (clickable), refs, and changed files with
   added / removed line counts and rename detection.
 - Search (⌘F) across commit messages, authors, emails, branch and tag names and SHA prefixes,
   ignoring case and accents; non-matching commits fade, Enter / Shift+Enter jump between matches.
 - Unified diff per file with line numbers.
-- Working copy, as in VS Code: an *Uncommitted changes* row at the top of the graph opens the
+- Working copy, as in VS Code: a *Working copy* row always pinned at the top of the graph (it
+  says *No local changes* when clean) and a *Changes* button with the changed-file count open the
   staged and unstaged files (untracked, renamed and conflicted included) with stage / unstage /
   discard per file or all at once, their diffs, and a commit box (⌘↩, *Amend last commit*).
   Discarding asks first, and untracked files go to the Trash, never straight to deletion.
@@ -31,9 +36,16 @@ Linux. UI in Spanish, English, Portuguese and French.
   explicit, confirmed second step.
 - Stashes in the sidebar: stash (with or without untracked files), apply, pop, drop, and the
   files each one holds.
-- Branches: double-click (or right-click → *Check out*) to switch, new branch from any commit,
-  delete merged branches; fetch, pull and push from the top bar (push sets the upstream the
-  first time and never forces).
+- Branches: double-click (or right-click → *Check out*) to switch; right-click a local branch to
+  pull it (fast-forward only, even when it is not checked out), push it, rename it, copy its
+  name, delete it, or delete its branch on the remote. Deleting an unmerged branch needs a second
+  confirmation (`git branch -D`); deleting a remote branch shows the exact
+  `git push <remote> --delete <branch>` and asks you to type the branch name. Right-click a remote
+  branch to check it out as a local tracking branch or delete it on the remote.
+- *Fetch*, *Pull* and *Push* buttons in the top bar, with the current branch's ahead / behind
+  counts and a spinner while they run. Push becomes *Publish* for a branch without an upstream
+  and shows the `--set-upstream` command before running it. Nothing is ever force-pushed; a
+  failure shows git's and the hook's output above the graph.
 - *Git output* panel with the running command, live output from git and its hooks, and Cancel.
 - Refreshes on its own when files change on disk or the window regains focus.
 - Keyboard: ↑/↓ or j/k to move, ⌘F to search, Esc to close a diff or clear the search, ⌘C copies the commit SHA, ⌘O opens a repo,

@@ -2,6 +2,7 @@
 //! through the `git` CLI (see `git.rs`). Every function here writes only when called.
 use crate::git::{self, Cancel, GitError, Run};
 use crate::{DiffLine, LineKind, Oid, Repo, Result};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,6 +201,16 @@ pub fn parse_unified(text: &str) -> (Vec<DiffLine>, u32, u32, bool) {
     (out, added, removed, false)
 }
 
+/// `origin/feature/x` → (`origin`, `feature/x`), matching the longest of `remotes` (remote
+/// names may contain `/`).
+pub fn split_remote_name(remotes: &[String], remote_branch: &str) -> Option<(String, String)> {
+    remotes
+        .iter()
+        .filter(|r| remote_branch.len() > r.len() + 1 && remote_branch.starts_with(r.as_str()) && remote_branch.as_bytes()[r.len()] == b'/')
+        .max_by_key(|r| r.len())
+        .map(|r| (r.clone(), remote_branch[r.len() + 1..].to_string()))
+}
+
 /// A no-op sink for [`git::run`] output.
 fn quiet() -> impl FnMut(&str, bool) {
     |_: &str, _: bool| {}
@@ -376,6 +387,91 @@ impl Repo {
         self.write(&["branch", "-d", "--", name])
     }
 
+    /// Force-delete a local branch that is not merged (`git branch -D`). The app only calls it
+    /// after a second, explicit confirmation.
+    pub fn delete_branch_force(&self, name: &str) -> Result<Run> {
+        self.write(&["branch", "-D", "--", name])
+    }
+
+    /// Whether `git branch -d` would accept deleting `name`: merged into its upstream, or into
+    /// HEAD when it has none.
+    pub fn branch_merged(&self, name: &str) -> bool {
+        let branch = format!("refs/heads/{name}");
+        let upstream = format!("{branch}@{{upstream}}");
+        let target = if self.git(&["rev-parse", "--verify", "-q", &upstream]).is_ok() { upstream } else { String::from("HEAD") }; // i18n-ok: ref
+        self.git(&["merge-base", "--is-ancestor", &branch, &target]).is_ok()
+    }
+
+    /// Rename a local branch; git refuses if the new name exists (`-m`, never `-M`).
+    pub fn rename_branch(&self, old: &str, new: &str) -> Result<Run> {
+        self.write(&["branch", "-m", "--", old, new])
+    }
+
+    /// Local branch → its upstream as a short name (`origin/main`).
+    pub fn upstreams(&self) -> Result<HashMap<String, String>> {
+        let raw = self.git(&["for-each-ref", "--format=%(refname)%00%(upstream)", "refs/heads"])?;
+        let short = |r: &str| r.strip_prefix("refs/remotes/").or_else(|| r.strip_prefix("refs/heads/")).unwrap_or(r).to_string();
+        Ok(String::from_utf8_lossy(&raw)
+            .lines()
+            .filter_map(|l| {
+                let (name, up) = l.split_once('\0')?;
+                let name = name.strip_prefix("refs/heads/")?;
+                (!up.is_empty()).then(|| (name.to_string(), short(up)))
+            })
+            .collect())
+    }
+
+    /// `origin/feature/x` → (`origin`, `feature/x`); see [`split_remote_name`].
+    pub fn split_remote(&self, remote_branch: &str) -> Result<(String, String)> {
+        split_remote_name(&self.remotes()?, remote_branch).ok_or_else(|| Box::new(GitError::Failed(format!("no remote for {remote_branch}"))) as crate::Error) // i18n-ok: internal
+    }
+
+    /// `git push <remote> --delete <branch>` for a remote-tracking name like `origin/x`.
+    pub fn delete_remote_args(&self, remote_branch: &str) -> Result<Vec<String>> {
+        let (remote, branch) = self.split_remote(remote_branch)?;
+        Ok(vec!["push".into(), remote, "--delete".into(), branch])
+    }
+
+    fn config(&self, key: &str) -> Option<String> {
+        self.git(&["config", "--get", key]).ok().map(|v| String::from_utf8_lossy(&v).trim().to_string()).filter(|v| !v.is_empty())
+    }
+
+    /// The branch's upstream as (remote, `refs/heads/…` on that remote).
+    fn tracking(&self, name: &str) -> Option<(String, String)> {
+        Some((self.config(&format!("branch.{name}.remote"))?, self.config(&format!("branch.{name}.merge"))?))
+    }
+
+    /// Fast-forward-only pull of a local branch: `pull --ff-only` when it is checked out, else
+    /// `fetch <remote> <merge>:refs/heads/<name>`, which git refuses unless it fast-forwards.
+    pub fn pull_ff_args(&self, name: &str, is_head: bool) -> Result<Vec<String>> {
+        if is_head {
+            return Ok(vec!["pull".into(), "--ff-only".into(), "--progress".into()]);
+        }
+        let (remote, merge) = self.tracking(name).ok_or_else(|| Box::new(GitError::Failed(format!("{name} has no upstream"))) as crate::Error)?; // i18n-ok: internal
+        Ok(vec!["fetch".into(), "--progress".into(), remote, format!("{merge}:refs/heads/{name}")])
+    }
+
+    /// Push any local branch: to its upstream when it has one, else `--set-upstream` to the
+    /// default push remote (see [`Repo::push_args`]). Never forces.
+    pub fn push_branch_args(&self, name: &str, is_head: bool) -> Result<Vec<String>> {
+        let mut args = vec!["push".to_string(), "--progress".to_string()];
+        match self.tracking(name) {
+            Some(_) if is_head => {}
+            Some((remote, merge)) => args.extend([remote, format!("refs/heads/{name}:{merge}")]),
+            None => args.extend(["--set-upstream".to_string(), self.push_remote(name)?, name.to_string()]),
+        }
+        Ok(args)
+    }
+
+    fn push_remote(&self, name: &str) -> Result<String> {
+        let remotes = self.remotes()?;
+        self.config(&format!("branch.{name}.pushRemote"))
+            .or_else(|| self.config("remote.pushDefault"))
+            .or_else(|| remotes.iter().find(|r| *r == "origin").cloned())
+            .or_else(|| (remotes.len() == 1).then(|| remotes[0].clone()))
+            .ok_or_else(|| Box::new(GitError::Failed(String::from("no remote"))) as crate::Error) // i18n-ok: internal
+    }
+
     pub fn remotes(&self) -> Result<Vec<String>> {
         Ok(String::from_utf8_lossy(&self.git(&["remote"])?).lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
     }
@@ -383,19 +479,10 @@ impl Repo {
     /// Arguments for a push: plain `push` with an upstream, else `push --set-upstream <remote>
     /// <branch>` to the branch's push remote, `remote.pushDefault`, `origin` or the only remote.
     pub fn push_args(&self, branch: &BranchStatus) -> Result<Vec<String>> {
-        let mut args = vec!["push".to_string(), "--progress".to_string()];
         let Some(name) = &branch.head else { return Err(Box::new(GitError::Failed(String::from("HEAD is detached")))) }; // i18n-ok: internal
         if branch.upstream.is_some() {
-            return Ok(args);
+            return Ok(vec!["push".to_string(), "--progress".to_string()]);
         }
-        let config = |k: &str| self.git(&["config", "--get", k]).ok().map(|v| String::from_utf8_lossy(&v).trim().to_string()).filter(|v| !v.is_empty());
-        let remotes = self.remotes()?;
-        let remote = config(&format!("branch.{name}.pushRemote"))
-            .or_else(|| config("remote.pushDefault"))
-            .or_else(|| remotes.iter().find(|r| *r == "origin").cloned())
-            .or_else(|| (remotes.len() == 1).then(|| remotes[0].clone()))
-            .ok_or_else(|| Box::new(GitError::Failed(String::from("no remote"))) as crate::Error)?; // i18n-ok: internal
-        args.extend(["--set-upstream".to_string(), remote, name.clone()]);
-        Ok(args)
+        Ok(vec!["push".to_string(), "--progress".to_string(), "--set-upstream".to_string(), self.push_remote(name)?, name.clone()])
     }
 }
