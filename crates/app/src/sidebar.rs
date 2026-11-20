@@ -17,7 +17,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-const SIDE_W: f32 = 260.;
+pub(crate) const SIDE_W: f32 = 260.;
 const ITEM_H: f32 = 26.;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
