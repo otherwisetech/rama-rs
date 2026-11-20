@@ -6,9 +6,10 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState, TextareaState};
 use gpui_component::{IconName, Sizable as _, Theme};
-use repo::{DiffLine, FileChange, History, Oid, RefKind, Repo};
+use crate::work::Work;
+use repo::{DiffLine, FileChange, History, Oid, RefKind, Repo, WorkFile};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -24,7 +25,7 @@ const SEARCH_KEYS: &str = "⌘F"; // i18n-ok: shortcut
 const SEARCH_KEYS: &str = "Ctrl+F"; // i18n-ok: shortcut
 const TOAST_FOR: Duration = Duration::from_secs(4);
 /// Commits loaded per repository; enough for years of history in most projects.
-const HISTORY_LIMIT: usize = 50_000;
+pub(crate) const HISTORY_LIMIT: usize = 50_000;
 
 actions!(rama, [OpenRepo, Reload, SelectPrev, SelectNext, CloseDiff, CopySha, FocusSearch, ShowAbout]);
 
@@ -64,6 +65,8 @@ pub struct Details {
 pub struct DiffState {
     pub file: FileChange,
     pub lines: Option<Result<Rc<Vec<DiffLine>>, String>>,
+    /// A working-copy file, and whether this is its staged side.
+    pub work: Option<(WorkFile, bool)>,
 }
 
 pub struct RamaApp {
@@ -77,6 +80,7 @@ pub struct RamaApp {
     pub details: Option<Details>,
     pub diff: Option<DiffState>,
     pub collapsed: HashSet<RefKind>,
+    pub stashes_collapsed: bool,
     pub list_scroll: UniformListScrollHandle,
     pub side_scroll: UniformListScrollHandle,
     pub diff_scroll: UniformListScrollHandle,
@@ -95,6 +99,8 @@ pub struct RamaApp {
     /// The About modal is open.
     pub about: bool,
     logo: Arc<Image>,
+    pub work: Work,
+    pub(crate) prompt_sub: Option<Subscription>,
     _subs: Vec<Subscription>,
 }
 
@@ -102,7 +108,24 @@ impl RamaApp {
     pub fn new(initial: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         sync_theme(Some(window), cx);
         let search = cx.new(|cx| InputState::new(window, cx));
+        let message = cx.new(|cx| TextareaState::new(window, cx).auto_grow(3, 10));
         let subs = vec![
+            cx.subscribe_in(&message, window, |this, _, ev: &InputEvent, window, cx| {
+                // ⌘↩ / Ctrl+↩ commits; the textarea has already inserted a newline for it
+                if let InputEvent::PressEnter { secondary: true, .. } = ev {
+                    let v = this.work.message.read(cx).value().to_string();
+                    if let Some(trimmed) = v.strip_suffix('\n') {
+                        let trimmed = trimmed.to_string();
+                        this.work.message.update(cx, |m, cx| m.set_value(trimmed, window, cx));
+                    }
+                    this.commit(false, cx);
+                }
+            }),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() && matches!(this.phase, Phase::Ready) {
+                    this.refresh(false, cx);
+                }
+            }),
             window.observe_window_appearance(|window, cx| sync_theme(Some(window), cx)),
             cx.subscribe_in(&search, window, |this, _, ev: &InputEvent, window, cx| match ev {
                 InputEvent::Change => this.run_search(cx),
@@ -123,6 +146,7 @@ impl RamaApp {
             details: None,
             diff: None,
             collapsed: HashSet::new(),
+            stashes_collapsed: false,
             list_scroll: UniformListScrollHandle::new(),
             side_scroll: UniformListScrollHandle::new(),
             diff_scroll: UniformListScrollHandle::new(),
@@ -138,8 +162,11 @@ impl RamaApp {
             toast: None,
             about: false,
             logo: Arc::new(Image::from_bytes(ImageFormat::Png, crate::ICON_PNG.to_vec())),
+            work: Work::new(message),
+            prompt_sub: None,
             _subs: subs,
         };
+        this.check_git(cx);
         if let Some(p) = initial {
             this.open(p, window, cx);
         }
@@ -196,16 +223,20 @@ impl RamaApp {
         crate::settings::add_recent(&root);
         self.recent = crate::settings::recent();
         window.set_window_title(&format!("{} — {}", repo.name(), crate::APP_NAME));
-        let mut by_row: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (i, r) in history.refs.iter().enumerate() {
-            if let Some(&row) = history.index.get(&r.target) {
-                by_row.entry(row).or_default().push(i);
-            }
-        }
+        let by_row = refs_by_row(&history);
         // big remote lists start folded so local branches stay in view
         let remotes = history.refs.iter().filter(|r| r.kind == RefKind::Remote).count();
         self.collapsed = if remotes > 40 { HashSet::from([RefKind::Remote]) } else { HashSet::new() };
-        let keep = self.selected_id().filter(|_| self.repo.as_ref().is_some_and(|r| r.root() == root));
+        let same = self.repo.as_ref().is_some_and(|r| r.root() == root);
+        let keep = self.selected_id().filter(|_| same);
+        if !same {
+            let message = self.work.message.clone();
+            message.update(cx, |m, cx| m.set_value("", window, cx));
+            let git_missing = self.work.git_missing;
+            self.work = Work::new(message);
+            self.work.git_missing = git_missing;
+        }
+        let wip = self.work.wip;
         self.refs_by_row = Rc::new(by_row);
         self.repo = Some(repo);
         let head_row = history.head.and_then(|h| history.index.get(&h).copied());
@@ -217,8 +248,35 @@ impl RamaApp {
         self.diff = None;
         self.details = None;
         self.selected = None;
-        if let Some(r) = sel {
+        if wip {
+            self.select_wip(cx);
+        } else if let Some(r) = sel {
             self.select(r, true, cx);
+        }
+        self.refresh(false, cx);
+        self.watch(root, cx);
+    }
+
+    /// A refreshed history after a git operation or a change on disk: keep the selected
+    /// commit (its details are still valid) or fall back to HEAD if it's gone.
+    pub(crate) fn replace_history(&mut self, history: History, cx: &mut Context<Self>) {
+        let keep = self.selected_id();
+        self.refs_by_row = Rc::new(refs_by_row(&history));
+        let row = keep.and_then(|id| history.index.get(&id).copied());
+        let head_row = history.head.and_then(|h| history.index.get(&h).copied());
+        self.history = Some(Arc::new(history));
+        self.run_search(cx);
+        match (keep, row) {
+            (Some(_), Some(r)) => self.selected = Some(r),
+            (Some(_), None) => {
+                self.selected = None;
+                self.details = None;
+                self.diff = None;
+                if let Some(r) = head_row {
+                    self.select(r, true, cx);
+                }
+            }
+            (None, _) => {}
         }
     }
 
@@ -275,6 +333,8 @@ impl RamaApp {
             return;
         }
         self.selected = Some(row);
+        self.work.wip = false;
+        self.work.stash = None;
         self.diff = None;
         let id = c.id;
         self.details = Some(Details { id, message: None, changes: None });
@@ -312,6 +372,10 @@ impl RamaApp {
         }
         let Some(h) = &self.history else { return };
         let n = h.commits.len() as isize;
+        if self.selected == Some(0) && delta < 0 && self.work.dirty() {
+            self.select_wip(cx);
+            return;
+        }
         if n == 0 {
             return;
         }
@@ -380,8 +444,11 @@ impl RamaApp {
 
     /// Esc: close the About modal, else the diff, else clear the search and go back to the list.
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.about {
+        if self.about || self.work.confirm.is_some() || self.work.prompt.is_some() {
             self.about = false;
+            self.work.confirm = None;
+            self.work.prompt = None;
+            self.prompt_sub = None;
             cx.notify();
             return;
         }
@@ -403,19 +470,24 @@ impl RamaApp {
             self.placeholder_locale = loc;
             let text = i18n::t!("app.search.placeholder", keys = SEARCH_KEYS);
             self.search.update(cx, |s, cx| s.set_placeholder(text, window, cx));
+            let text = i18n::t!("app.work.message_placeholder", keys = crate::work_view::COMMIT_KEYS);
+            self.work.message.update(cx, |s, cx| s.set_placeholder(text, window, cx));
+        }
+        if std::mem::take(&mut self.work.clear_message) {
+            self.work.message.update(cx, |s, cx| s.set_value("", window, cx));
         }
     }
 
     pub fn open_diff(&mut self, file: FileChange, cx: &mut Context<Self>) {
         let Some(repo) = self.repo.clone() else { return };
-        self.diff = Some(DiffState { file: file.clone(), lines: None });
+        self.diff = Some(DiffState { file: file.clone(), lines: None, work: None });
         self.diff_scroll.scroll_to_item(0, ScrollStrategy::Top);
         let path = file.path.clone();
         let task = cx.background_executor().spawn(async move { repo.diff(&file).map_err(|e| e.to_string()) });
         cx.spawn(async move |this, cx| {
             let res = task.await;
             this.update(cx, |this, cx| {
-                if let Some(d) = this.diff.as_mut().filter(|d| d.file.path == path) {
+                if let Some(d) = this.diff.as_mut().filter(|d| d.file.path == path && d.work.is_none()) {
                     d.lines = Some(res.map(Rc::new));
                     cx.notify();
                 }
@@ -487,7 +559,7 @@ impl RamaApp {
             .border_color(t.border)
             .bg(t.surface)
             .child(left)
-            .when(matches!(self.phase, Phase::Ready), |d| d.child(self.render_search(t, cx)))
+            .when(matches!(self.phase, Phase::Ready), |d| d.child(self.render_search(t, cx)).child(self.render_remote_buttons(t, cx)))
             .child(ui::icon_button(t, "reload", IconName::Redo, can_reload).when(can_reload, |d| d.on_click(cx.listener(|this, _, window, cx| this.reload(window, cx)))))
             .child(ui::outline_button(t, "open").child(icon(IconName::FolderOpen, 15., t.ink)).child(i18n::t!("app.topbar.open")).on_click(cx.listener(|this, _, window, cx| this.open_dialog(window, cx))))
             .child(lang)
@@ -623,6 +695,7 @@ impl RamaApp {
             .text_size(px(11.))
             .text_color(t.ink_muted)
             .child(div().flex_1().min_w_0().truncate().child(left))
+            .when(matches!(self.phase, Phase::Ready), |d| d.child(self.render_output_toggle(t, cx)))
             .child(
                 div()
                     .id("footer-about")
@@ -714,15 +787,30 @@ impl Render for RamaApp {
             }
             Phase::Ready => {
                 let center = if self.diff.is_some() { self.render_diff(&t, cx).into_any_element() } else { self.render_graph(&t, window, cx).into_any_element() };
+                let right = if self.work.wip {
+                    self.render_work(&t, cx).into_any_element()
+                } else if self.work.stash.is_some() {
+                    self.render_stash(&t, cx).into_any_element()
+                } else {
+                    self.render_detail(&t, cx).into_any_element()
+                };
+                // j/k/↑/↓ belong to the list; the commit box on the right must get its letters
                 div()
-                    .key_context(LIST_CONTEXT)
-                    .track_focus(&self.list_focus)
                     .flex()
                     .size_full()
                     .min_h_0()
-                    .child(self.render_sidebar(&t, cx))
-                    .child(div().flex_1().min_w_0().h_full().child(center))
-                    .child(self.render_detail(&t, cx))
+                    .child(
+                        div()
+                            .key_context(LIST_CONTEXT)
+                            .track_focus(&self.list_focus)
+                            .flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(self.render_sidebar(&t, cx))
+                            .child(div().flex().flex_col().flex_1().min_w_0().h_full().child(div().flex_1().min_h_0().child(center)).child(self.render_output(&t, cx))),
+                    )
+                    .child(right)
                     .into_any_element()
             }
         };
@@ -749,7 +837,18 @@ impl Render for RamaApp {
             .child(self.render_footer(&t, cx))
             .children(self.render_toast(&t))
             .when(self.about, |d| d.child(self.render_about(&t, cx)))
+            .children(self.render_modal(&t, cx))
     }
+}
+
+fn refs_by_row(history: &History) -> HashMap<usize, Vec<usize>> {
+    let mut by_row: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, r) in history.refs.iter().enumerate() {
+        if let Some(&row) = history.index.get(&r.target) {
+            by_row.entry(row).or_default().push(i);
+        }
+    }
+    by_row
 }
 
 /// Not-a-repository is the common case; anything else shows the library's own message.

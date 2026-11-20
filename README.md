@@ -6,7 +6,7 @@ Explore git repositories: every branch and merge as a coloured commit graph, the
 a glance, and each commit's changes down to the line. *Rama* is Spanish for *branch*.
 
 Native desktop app in Rust: [gitoxide](https://github.com/GitoxideLabs/gitoxide) reads the
-repository (no libgit2, no `git` binary needed) and [GPUI](https://www.gpui.rs/) with
+history (no libgit2), the `git` command does every write, and [GPUI](https://www.gpui.rs/) with
 [gpui-component](https://github.com/longbridge/gpui-component) draws it. macOS, Windows and
 Linux. UI in Spanish, English, Portuguese and French.
 
@@ -22,9 +22,43 @@ Linux. UI in Spanish, English, Portuguese and French.
 - Search (⌘F) across commit messages, authors, emails, branch and tag names and SHA prefixes,
   ignoring case and accents; non-matching commits fade, Enter / Shift+Enter jump between matches.
 - Unified diff per file with line numbers.
+- Working copy, as in VS Code: an *Uncommitted changes* row at the top of the graph opens the
+  staged and unstaged files (untracked, renamed and conflicted included) with stage / unstage /
+  discard per file or all at once, their diffs, and a commit box (⌘↩, *Amend last commit*).
+  Discarding asks first, and untracked files go to the Trash, never straight to deletion.
+- Git hooks run exactly as on the command line (see below); a rejected commit keeps your
+  message and shows the hook's output. *Commit without hooks (--no-verify)* exists only as an
+  explicit, confirmed second step.
+- Stashes in the sidebar: stash (with or without untracked files), apply, pop, drop, and the
+  files each one holds.
+- Branches: double-click (or right-click → *Check out*) to switch, new branch from any commit,
+  delete merged branches; fetch, pull and push from the top bar (push sets the upstream the
+  first time and never forces).
+- *Git output* panel with the running command, live output from git and its hooks, and Cancel.
+- Refreshes on its own when files change on disk or the window regains focus.
 - Keyboard: ↑/↓ or j/k to move, ⌘F to search, Esc to close a diff or clear the search, ⌘C copies the commit SHA, ⌘O opens a repo,
   ⌘R reloads.
-- Read-only: rama never writes to your repository.
+- Writes only when you ask: every change to a repository is an explicit action, the destructive
+  ones ask for confirmation, and nothing is ever force-pushed.
+
+## Git hooks and PATH
+
+Commit, stage, stash, checkout, fetch, pull and push run the `git` you have installed, so
+`pre-commit`, `commit-msg`, `prepare-commit-msg`, `post-commit` and `pre-push` hooks,
+`core.hooksPath` (husky v9's `.husky/_`, and with it `~/.config/husky/init.sh`), commit signing,
+Git LFS, credential helpers and your config behave exactly as in a terminal. Viewing history
+does not need `git`; if it is missing, rama says so and the write actions stay disabled.
+
+Apps opened from Finder, the Dock or a desktop launcher don't get the PATH your shell sets up,
+which is why hooks that call `node`, `npx` or `pnpm` fail with "command not found" in many GUI
+git clients. At startup rama asks your login shell for its environment once, in the background
+(`$SHELL -l -i -c env`, with a timeout; zsh, bash and fish), and uses it for every git command,
+so nvm, fnm, volta, asdf, mise and Homebrew installs are found. If that fails it falls back to
+the inherited PATH plus the usual install folders. On Windows the inherited environment is used
+as is. To see the PATH rama will use: `cargo run -p rama-repo --example shell_path`.
+
+git runs without a terminal: password prompts are off (`GIT_TERMINAL_PROMPT=0`), so use a
+credential helper or an ssh agent for remotes that need a login.
 
 ## Download
 
@@ -38,7 +72,7 @@ Ready-made builds for macOS (Apple silicon and Intel), Linux and Windows are att
 - **Windows:** unzip and run `rama.exe` (SmartScreen may ask to confirm, since it is unsigned).
 
 The downloads are built by GitHub Actions from the tagged source, but they are **not code-signed
-or notarized**. rama makes no network requests.
+or notarized**. rama makes no network requests of its own; fetch, pull and push run `git`.
 
 ## Build and run
 
@@ -52,7 +86,8 @@ script/bundle-macos.sh                       # macOS: target/release/rama.app wi
 
 ```
 crates/graph  rama-graph: topological order and lane layout — no git, no UI
-crates/repo   rama-repo: history, refs, changed files and diffs through gitoxide — no UI
+crates/repo   rama-repo: history, refs, changed files and diffs through gitoxide; working-copy
+              status and every write through the git CLI; login-shell PATH — no UI
 crates/i18n   rama-i18n: embedded catalogs (es, en, pt, fr) and i18n guard tests
 crates/app    `rama` desktop app
 ```

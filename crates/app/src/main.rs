@@ -10,6 +10,8 @@ mod sidebar;
 mod theme;
 mod ui;
 mod util;
+mod work;
+mod work_view;
 
 use gpui::*;
 use gpui_component::Root;
@@ -90,6 +92,8 @@ fn main() {
         return;
     }
     let initial: Option<PathBuf> = arg.map(PathBuf::from);
+    // hooks need the login shell's PATH (node, npx, pnpm…); resolve it while the window opens
+    repo::shell_env::init();
     gpui_platform::application().with_assets(AppAssets).run(move |cx| {
         if let Err(e) = cx.text_system().add_fonts(FONTS.iter().map(|f| Cow::Borrowed(*f)).collect()) {
             eprintln!("fonts: {e}");
