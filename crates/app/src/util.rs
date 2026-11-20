@@ -47,6 +47,40 @@ pub fn group(n: usize) -> String {
     out
 }
 
+/// 1_234_567_890 → "1.2 GB" (units from the catalog: fr "Go").
+pub fn bytes(n: u64) -> String {
+    const K: f64 = 1024.;
+    let f = n as f64;
+    if f < K {
+        i18n::t!("app.size.b", n = n)
+    } else if f < K * K {
+        i18n::t!("app.size.kb", n = format!("{:.0}", f / K))
+    } else if f < K * K * K {
+        i18n::t!("app.size.mb", n = format!("{:.1}", f / K / K))
+    } else if f < K * K * K * K {
+        i18n::t!("app.size.gb", n = format!("{:.1}", f / K / K / K))
+    } else {
+        i18n::t!("app.size.tb", n = format!("{:.1}", f / K / K / K / K))
+    }
+}
+
+/// How long ago `secs` (since the epoch) was, from `now`: "3 days ago".
+pub fn ago(secs: i64, now: i64) -> String {
+    let d = (now - secs).max(0);
+    match d {
+        0..60 => i18n::t!("app.ago.now"),
+        60..3600 => i18n::tn!("app.ago.minutes", d / 60),
+        3600..86_400 => i18n::tn!("app.ago.hours", d / 3600),
+        86_400..2_592_000 => i18n::tn!("app.ago.days", d / 86_400),
+        2_592_000..31_536_000 => i18n::tn!("app.ago.months", d / 2_592_000),
+        _ => i18n::tn!("app.ago.years", d / 31_536_000),
+    }
+}
+
+pub fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,5 +96,10 @@ mod tests {
         assert_eq!(datetime(1_795_000_000, -5 * 3600), "2026-11-18 06:06");
         assert_eq!(datetime(951_782_400, 0), "2000-02-29 00:00");
         assert_eq!(group(60769), "60\u{202F}769");
+        i18n::set_locale("en");
+        assert_eq!(bytes(512), "512 B");
+        assert_eq!(bytes(1_288_490_189), "1.2 GB");
+        assert_eq!(ago(100, 100 + 3 * 86_400), "3 days ago");
+        assert_eq!(ago(100, 130), "just now");
     }
 }

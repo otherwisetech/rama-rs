@@ -27,11 +27,15 @@ const SEARCH_KEYS: &str = "Ctrl+F"; // i18n-ok: shortcut
 const FILTER_KEYS: &str = "⌘⇧F"; // i18n-ok: shortcut
 #[cfg(not(target_os = "macos"))]
 const FILTER_KEYS: &str = "Ctrl+Shift+F"; // i18n-ok: shortcut
+#[cfg(target_os = "macos")]
+const MAP_KEYS: &str = "⌘M"; // i18n-ok: shortcut
+#[cfg(not(target_os = "macos"))]
+const MAP_KEYS: &str = "Ctrl+M"; // i18n-ok: shortcut
 const TOAST_FOR: Duration = Duration::from_secs(4);
 /// Commits loaded per repository; enough for years of history in most projects.
 pub(crate) const HISTORY_LIMIT: usize = 50_000;
 
-actions!(rama, [OpenRepo, Reload, SelectPrev, SelectNext, CloseDiff, CopySha, FocusSearch, FocusFilter, ShowAbout]);
+actions!(rama, [OpenRepo, Reload, SelectPrev, SelectNext, CloseDiff, CopySha, FocusSearch, FocusFilter, ShowAbout, ToggleMap, ZoomIn, ZoomOut, ZoomReset]);
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -47,6 +51,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-f", FocusFilter, Some(CONTEXT)),
         // only while the list has focus, so "/" still types in text fields
         KeyBinding::new("/", FocusFilter, Some(LIST_CONTEXT)),
+        KeyBinding::new("secondary-m", ToggleMap, Some(CONTEXT)),
+        KeyBinding::new("secondary-=", ZoomIn, Some(CONTEXT)),
+        KeyBinding::new("secondary-+", ZoomIn, Some(CONTEXT)),
+        KeyBinding::new("secondary--", ZoomOut, Some(CONTEXT)),
+        KeyBinding::new("secondary-0", ZoomReset, Some(CONTEXT)),
     ]);
 }
 
@@ -112,6 +121,12 @@ pub struct RamaApp {
     pub about: bool,
     logo: Arc<Image>,
     pub work: Work,
+    /// The worktree map replaces the graph.
+    pub map_view: bool,
+    pub map: crate::map::MapState,
+    pub cleanup: Option<crate::cleanup::CleanupState>,
+    /// Branches deleted by cleanup this session, to restore (name, commit).
+    pub undo: Vec<(String, Oid)>,
     pub(crate) prompt_sub: Option<Subscription>,
     _subs: Vec<Subscription>,
 }
@@ -137,6 +152,9 @@ impl RamaApp {
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() && matches!(this.phase, Phase::Ready) {
                     this.refresh(false, cx);
+                    if this.map_view {
+                        this.reload_map(false, cx);
+                    }
                 }
             }),
             window.observe_window_appearance(|window, cx| sync_theme(Some(window), cx)),
@@ -188,6 +206,10 @@ impl RamaApp {
             about: false,
             logo: Arc::new(Image::from_bytes(ImageFormat::Png, crate::ICON_PNG.to_vec())),
             work: Work::new(message),
+            map_view: false,
+            map: crate::map::MapState::default(),
+            cleanup: None,
+            undo: Vec::new(),
             prompt_sub: None,
             _subs: subs,
         };
@@ -267,6 +289,10 @@ impl RamaApp {
             let git_missing = self.work.git_missing;
             self.work = Work::new(message);
             self.work.git_missing = git_missing;
+            self.map.cancel_sizes();
+            self.map = crate::map::MapState::default();
+            self.cleanup = None;
+            self.undo.clear();
         }
         let wip = self.work.wip;
         self.refs_by_row = Rc::new(by_row);
@@ -287,6 +313,9 @@ impl RamaApp {
         }
         self.refresh(false, cx);
         self.watch(root, cx);
+        if self.map_view {
+            self.show_map(true, cx);
+        }
     }
 
     /// A refreshed history after a git operation or a change on disk: keep the selected
@@ -482,6 +511,10 @@ impl RamaApp {
 
     /// Esc: close the About modal, else the diff, else clear the search and go back to the list.
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.map.dialog.take().is_some() || self.cleanup.take().is_some() {
+            cx.notify();
+            return;
+        }
         if self.about || self.work.confirm.is_some() || self.work.prompt.is_some() {
             self.about = false;
             self.work.confirm = None;
@@ -557,9 +590,7 @@ impl RamaApp {
 
     fn set_language(&mut self, code: &'static str, cx: &mut Context<Self>) {
         if i18n::set_locale(code) {
-            let mut s = crate::settings::Settings::load();
-            s.language = Some(code.to_string());
-            s.save();
+            crate::settings::Settings::update(|s| s.language = Some(code.to_string()));
             gpui_component::set_locale(code);
             crate::set_app_menus(cx);
             cx.refresh_windows();
@@ -578,7 +609,8 @@ impl RamaApp {
                 left = left
                     .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).truncate().child(repo.name()))
                     .child(div().flex().flex_none().items_center().gap(px(5.)).px(px(9.)).py(px(3.)).rounded_full().bg(t.accent_soft).text_color(t.accent).text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(ui::branch_icon(12., t.accent)).child(branch))
-                    .child(div().flex_none().text_size(px(12.)).text_color(t.ink_muted).child(count));
+                    .child(div().flex_none().text_size(px(12.)).text_color(t.ink_muted).child(count))
+                    .child(self.render_view_toggle(t, cx));
             }
             _ => left = left.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(crate::APP_NAME)),
         }
@@ -613,6 +645,28 @@ impl RamaApp {
             .child(ui::icon_button(t, "reload", IconName::Redo, can_reload).when(can_reload, |d| d.on_click(cx.listener(|this, _, window, cx| this.reload(window, cx)))))
             .child(ui::outline_button(t, "open").child(icon(IconName::FolderOpen, 15., t.ink)).child(i18n::t!("app.topbar.open")).on_click(cx.listener(|this, _, window, cx| this.open_dialog(window, cx))))
             .child(lang)
+    }
+
+    /// Graph | Map switch (⌘M).
+    fn render_view_toggle(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
+        let map = self.map_view;
+        let seg = |id: &'static str, ic: IconName, label: String, on: bool| {
+            div().id(id).flex().items_center().gap(px(5.)).h(px(26.)).px(px(9.)).rounded(px(7.)).text_size(px(12.)).cursor_pointer().when(on, |d| d.bg(t.surface).font_weight(FontWeight::SEMIBOLD).shadow_sm()).when(!on, |d| d.text_color(t.ink_muted)).child(icon(ic, 13., if on { t.ink } else { t.ink_muted })).child(label)
+        };
+        let tip = i18n::t!("app.map.toggle_tip", keys = MAP_KEYS);
+        div()
+            .id("view-toggle")
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(2.))
+            .ml(px(6.))
+            .p(px(2.))
+            .rounded(px(9.))
+            .bg(t.border.opacity(0.6))
+            .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+            .child(seg("view-graph", IconName::GalleryVerticalEnd, i18n::t!("app.map.graph"), !map).on_click(cx.listener(|this, _, _, cx| this.show_map(false, cx))))
+            .child(seg("view-map", IconName::Map, i18n::t!("app.map.tab"), map).on_click(cx.listener(|this, _, _, cx| this.show_map(true, cx))))
     }
 
     fn render_search(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
@@ -837,6 +891,18 @@ impl Render for RamaApp {
                 let (path, message) = (path.clone(), message.clone());
                 self.render_failed(&t, &path, &message, cx).into_any_element()
             }
+            Phase::Ready if self.map_view => {
+                let center = self.render_map(&t, cx);
+                let right = self.render_map_panel(&t, cx);
+                div()
+                    .flex()
+                    .size_full()
+                    .min_h_0()
+                    .child(self.render_sidebar(&t, cx))
+                    .child(div().flex().flex_col().flex_1().min_w_0().h_full().children(self.render_op_failure(&t, cx)).child(div().flex_1().min_h_0().child(center)).child(self.render_output(&t, cx)))
+                    .child(right)
+                    .into_any_element()
+            }
             Phase::Ready => {
                 let center = if self.diff.is_some() { self.render_diff(&t, cx).into_any_element() } else { self.render_graph(&t, window, cx).into_any_element() };
                 let right = if self.work.wip {
@@ -879,6 +945,14 @@ impl Render for RamaApp {
             .on_action(cx.listener(|this, _: &FocusFilter, window, cx| this.focus_filter(window, cx)))
             .on_action(cx.listener(|this, _: &ShowAbout, _, cx| this.show_about(cx)))
             .on_action(cx.listener(|this, _: &CopySha, _, cx| this.copy_sha(cx)))
+            .on_action(cx.listener(|this, _: &ToggleMap, _, cx| {
+                if matches!(this.phase, Phase::Ready) {
+                    this.show_map(!this.map_view, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.map_zoom_key(Some(1.2), cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.map_zoom_key(Some(1. / 1.2), cx)))
+            .on_action(cx.listener(|this, _: &ZoomReset, _, cx| this.map_zoom_key(None, cx)))
             .relative()
             .flex()
             .flex_col()
@@ -892,6 +966,8 @@ impl Render for RamaApp {
             .children(self.render_toast(&t))
             .when(self.about, |d| d.child(self.render_about(&t, cx)))
             .children(self.render_modal(&t, cx))
+            .children(self.render_cleanup(&t, cx))
+            .children(self.render_map_dialog(&t, cx))
     }
 }
 

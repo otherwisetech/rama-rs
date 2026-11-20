@@ -11,8 +11,12 @@ pub use gix::ObjectId as Oid;
 mod git;
 pub mod shell_env;
 mod work;
+mod worktree;
+mod cleanup;
 
 pub use git::{Cancel, GitError, Run, failed_hook, strip_ansi, version as git_version};
+pub use cleanup::{Candidate, PROTECTED, Reason, glob_match, is_protected};
+pub use worktree::{BASE_NAMES, BaseRef, BranchFacts, DiskUsage, HEAVY_DIRS, NewWorktree, Worktree, WorktreeEntry, WorktreeInfo, default_worktree_path, disk_usage, parse_track, parse_worktree_list, worktree_add_args};
 pub use work::{BranchStatus, FileState, Stash, WorkFile, WorkStatus, parse_stash_list, parse_status, parse_unified, split_remote_name};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;

@@ -2,9 +2,13 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
+mod cleanup;
 mod detail;
 mod diff_view;
 mod graph_view;
+mod launch;
+mod map;
+mod map_view;
 mod settings;
 mod sidebar;
 mod theme;
@@ -108,20 +112,30 @@ fn main() {
         cx.on_action(|_: &OpenWebsite, cx| cx.open_url(COMPANY_URL));
         gpui_component::set_locale(i18n::locale());
         set_app_menus(cx);
-        cx.on_window_closed(|cx, _| cx.quit()).detach();
-        let window_options = WindowOptions {
-            window_bounds: Some(WindowBounds::centered(size(px(1440.), px(900.)), cx)),
-            titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..Default::default() }),
-            ..Default::default()
-        };
-        let initial = initial.clone();
-        cx.spawn(async move |cx| {
-            cx.open_window(window_options, |window, cx| {
-                let view = cx.new(|cx| app::RamaApp::new(initial, window, cx));
-                cx.new(|cx| Root::new(view, window, cx))
-            })
-            .expect("open window");
+        // "Open in rama" opens more windows; quit when the last one closes
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
         })
         .detach();
+        open_window(initial.clone(), cx);
     });
+}
+
+/// A new window, on `path`'s repository if given.
+pub(crate) fn open_window(path: Option<PathBuf>, cx: &mut App) {
+    let window_options = WindowOptions {
+        window_bounds: Some(WindowBounds::centered(size(px(1440.), px(900.)), cx)),
+        titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..Default::default() }),
+        ..Default::default()
+    };
+    cx.spawn(async move |cx| {
+        cx.open_window(window_options, |window, cx| {
+            let view = cx.new(|cx| app::RamaApp::new(path, window, cx));
+            cx.new(|cx| Root::new(view, window, cx))
+        })
+        .expect("open window");
+    })
+    .detach();
 }
