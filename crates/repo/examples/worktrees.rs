@@ -15,8 +15,11 @@ fn main() -> repo::Result<()> {
     for e in &all {
         println!("  {} {:?} changed={} vs={:?} merged={} gone={}", e.wt.path.display(), e.wt.branch, e.info.changed(), e.info.vs_default(), e.info.merged, e.info.gone); // i18n-ok: dev tool
     }
-    let t = Instant::now();
     let protected: Vec<String> = repo::PROTECTED.iter().map(|s| s.to_string()).collect();
+    let t = Instant::now();
+    let quick = r.cleanup_candidates(&bases[0], &protected, false, &repo::Cancel::default(), &|_, _| {})?;
+    println!("{} cleanup candidates without the squash check in {:?}", quick.len(), t.elapsed()); // i18n-ok: dev tool
+    let t = Instant::now();
     let c = r.cleanup_candidates(&bases[0], &protected, true, &repo::Cancel::default(), &|_, _| {})?;
     let squashed = c.iter().filter(|c| matches!(c.reason, repo::Reason::Squashed { .. })).count();
     println!("{} cleanup candidates ({squashed} squash-merged) in {:?}", c.len(), t.elapsed()); // i18n-ok: dev tool
