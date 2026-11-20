@@ -14,8 +14,9 @@ crates/i18n   rama-i18n: embedded translation catalogs, t!/tn!/tv! macros, i18n 
 crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: worktree map;
               cleanup.rs: branch cleanup dialog; launch.rs: external terminals and agent CLIs;
               agents.rs: AI agents at work per worktree (processes via sysinfo, Claude session
-              files; pure `scan` over a process list, tested with fakes); agents_view.rs: poll,
-              animation, badge; robot.rs: the pixel sprite
+              files; pure `scan` / `classify` / `Tracker`, tested with fakes); agents_view.rs:
+              poll, animation, badge, panel rows, legend; robot.rs: the pixel sprites;
+              transcript.rs: session log → conversation items; convo_view.rs: Conversation tab
 ```
 
 ## Rules
@@ -45,10 +46,13 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
   (`GIT_CONFIG_GLOBAL`, `commit.gpgsign=false`) and never touches the real Trash; `tests/worktrees.rs`
   does the same for worktrees and cleanup. `examples/worktrees.rs` times the map and cleanup scans
   read-only (safe on a real repository).
-- Agent badges read, never write: process list (sysinfo) and Claude Code session files
-  (`~/.claude/projects/...`: mtime and the last entries' `type` / `stop_reason` / title only). Never
-  display or log conversation text. Polling happens only while the window is on screen and the
-  graph or map shows; the 6 fps redraw only while an agent is working and motion isn't reduced.
+- Agent badges read, never write: process list (sysinfo), `~/.claude/sessions/<pid>.json` and
+  the session logs. For badges only mtime and the last entries' `type` / `stop_reason` / pending
+  tool name / error kind / trailing "?" / title are read. The conversation viewer reads a log only
+  while the user has its tab open (tail first, capped); its text is shown there and nowhere else:
+  never written, sent, cached on disk or logged. Polling happens only while the window is on
+  screen and the graph or map shows; the 6 fps redraw only while an agent works or waves and
+  motion isn't reduced.
 - External terminals get the exact command line shown before its first run (remembered per
   terminal + command in settings); commands run through the login shell (`$SHELL -lc`).
 - Comments: sparse, only non-obvious why.

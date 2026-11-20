@@ -27,6 +27,8 @@ pub struct Settings {
     pub agent_badges: Option<String>,
     /// `"on"`: badges don't animate.
     pub reduce_motion: Option<String>,
+    /// `"on"`: a system notification when an agent starts needing you.
+    pub agent_notify: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,11 +100,12 @@ impl Settings {
             map_layout: st("map_layout"),
             agent_badges: st("agent_badges"),
             reduce_motion: st("reduce_motion"),
+            agent_notify: st("agent_notify"),
         }
     }
 
     fn to_json(&self) -> String {
-        let strings = [("language", &self.language), ("branch_sort", &self.branch_sort), ("default_branch", &self.default_branch), ("worktree_base", &self.worktree_base), ("terminal", &self.terminal), ("map_mode", &self.map_mode), ("map_layout", &self.map_layout), ("agent_badges", &self.agent_badges), ("reduce_motion", &self.reduce_motion)];
+        let strings = [("language", &self.language), ("branch_sort", &self.branch_sort), ("default_branch", &self.default_branch), ("worktree_base", &self.worktree_base), ("terminal", &self.terminal), ("map_mode", &self.map_mode), ("map_layout", &self.map_layout), ("agent_badges", &self.agent_badges), ("reduce_motion", &self.reduce_motion), ("agent_notify", &self.agent_notify)];
         let lists = [("protected", &self.protected), ("agents", &self.agents), ("launch_ok", &self.launch_ok)];
         let mut fields: Vec<String> = strings.iter().filter_map(|(k, v)| v.as_ref().map(|v| format!("  \"{k}\": {}", quote(v)))).collect();
         fields.extend(lists.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| format!("  \"{k}\": [{}]", v.iter().map(|x| quote(x)).collect::<Vec<_>>().join(", "))));
@@ -119,6 +122,10 @@ impl Settings {
 
     pub fn reduce_motion(&self) -> bool {
         self.reduce_motion.as_deref() == Some("on")
+    }
+
+    pub fn agent_notify(&self) -> bool {
+        self.agent_notify.as_deref() == Some("on")
     }
 
     pub fn protected_patterns(&self) -> Vec<String> {
@@ -296,6 +303,7 @@ mod tests {
             map_layout: Some("grouped".into()),
             agent_badges: Some("off".into()),
             reduce_motion: Some("on".into()),
+            agent_notify: Some("on".into()),
         };
         assert_eq!(Settings::parse(&s.to_json()), s);
         assert!(s.side_recent());

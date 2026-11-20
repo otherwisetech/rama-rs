@@ -168,7 +168,7 @@ impl RamaApp {
                 if self.map.list { self.map_list(t, &list, cx) } else { self.map_canvas(t, &list, cx) }
             }
         };
-        div().flex().flex_col().size_full().bg(t.canvas).child(toolbar).child(div().flex_1().min_h_0().child(body)).into_any_element()
+        div().flex().flex_col().size_full().bg(t.canvas).child(toolbar).child(div().flex_1().min_h_0().child(body)).children(self.agent_legend(t)).into_any_element()
     }
 
     /// Wraps onto more rows when narrow; `compact` drops the button labels (kept as tooltips).
@@ -413,6 +413,7 @@ impl RamaApp {
         card.on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
             cx.stop_propagation();
             this.map.selected = Some(path.clone());
+            this.convo_tab = false;
             if ev.click_count() == 2 {
                 this.open_in_new_window(path.clone(), cx);
             }
@@ -498,6 +499,7 @@ impl RamaApp {
                     .child(div().flex_none().w(px(140.)).flex().gap(px(3.)).overflow_hidden().children(self.flags(t, e).into_iter().map(|(f, c)| div().flex_none().px(px(5.)).rounded(px(4.)).bg(c.opacity(0.14)).text_color(c).text_size(px(10.)).child(f))))
                     .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                         this.map.selected = Some(path.clone());
+            this.convo_tab = false;
                         if ev.click_count() == 2 {
                             this.open_in_new_window(path.clone(), cx);
                         }
@@ -522,6 +524,39 @@ impl RamaApp {
     }
 
     pub(crate) fn render_map_panel(&self, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        if self.convo.is_some() {
+            let tab = |id: &'static str, label: String, on: bool| div().id(id).flex().items_center().h(px(26.)).px(px(10.)).rounded(px(7.)).text_size(px(12.)).cursor_pointer().when(on, |d| d.bg(t.surface).font_weight(FontWeight::SEMIBOLD).shadow_sm()).when(!on, |d| d.text_color(t.ink_muted)).child(label);
+            let convo = self.convo_tab;
+            let tabs = div()
+                .flex()
+                .flex_none()
+                .p(px(8.))
+                .border_b_1()
+                .border_color(t.border)
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(2.))
+                        .p(px(2.))
+                        .rounded(px(9.))
+                        .bg(t.border.opacity(0.6))
+                        .child(tab("panel-details", i18n::t!("app.convo.tab_details"), !convo).on_click(cx.listener(|this, _, _, cx| {
+                            this.convo_tab = false;
+                            cx.notify();
+                        })))
+                        .child(tab("panel-convo", i18n::t!("app.convo.tab"), convo).on_click(cx.listener(|this, _, _, cx| {
+                            this.convo_tab = true;
+                            this.refresh_convo(cx);
+                            cx.notify();
+                        }))),
+                );
+            let body = if convo { self.render_convo(t, cx) } else { self.render_map_details(t, cx) };
+            return div().flex().flex_col().flex_none().w(px(DETAIL_W)).h_full().bg(t.surface).border_l_1().border_color(t.border).child(tabs).child(div().flex().flex_col().flex_1().min_h_0().child(body)).into_any_element();
+        }
+        self.render_map_details(t, cx)
+    }
+
+    fn render_map_details(&self, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let panel = div().id("map-panel").flex().flex_col().flex_none().w(px(DETAIL_W)).h_full().bg(t.surface).border_l_1().border_color(t.border).overflow_y_scroll();
         let Some(list) = self.map.list() else { return panel.into_any_element() };
         let Some(e) = self.map.selected.as_ref().and_then(|p| self.map.entry(p)).cloned() else {
@@ -556,11 +591,8 @@ impl RamaApp {
             .child(div().font_family(MONO).text_size(px(11.)).text_color(t.ink_muted).child(e.wt.path.display().to_string()))
             .child(div().flex().flex_wrap().gap(px(4.)).children(self.flags(t, &e).into_iter().map(|(f, c)| div().px(px(6.)).rounded(px(5.)).bg(c.opacity(0.14)).text_color(c).text_size(px(11.)).child(f))))
             .child(kv(i18n::t!("app.map.col_branch"), Self::head_label(&e)));
-        if let Some(found) = self.agents.found.get(&e.wt.path) {
-            let mut lines = crate::agents_view::describe(found, now());
-            lines.pop();
-            let robot = self.agent_badge(t, &e.wt.path, 2., "panel-agent", cx);
-            info = info.child(div().flex().items_start().gap(px(8.)).children(robot).child(div().flex_1().min_w_0().child(kv(i18n::t!("app.agents.title"), lines.join("\n")))));
+        if let Some(rows) = self.agent_rows(t, &e.wt.path, cx) {
+            info = info.child(rows);
         }
         if let Some(up) = &e.info.upstream {
             info = info.child(kv(i18n::t!("app.map.upstream"), if e.info.gone { i18n::t!("app.map.upstream_gone", upstream = up) } else { format!("{up}  {}", ab(e.info.ahead, e.info.behind)) })); // i18n-ok: name and arrows
@@ -816,6 +848,14 @@ impl RamaApp {
                         }
                         cx.notify();
                     })))
+                    .when(cfg!(target_os = "macos"), |d| {
+                        d.child(Checkbox::new("set-notify").small().label(i18n::t!("app.map.set_notify")).checked(f.notify).on_click(cx.listener(|this, on: &bool, _, cx| {
+                            if let Some(Dialog::Settings(f)) = this.map.dialog.as_mut() {
+                                f.notify = *on;
+                            }
+                            cx.notify();
+                        })))
+                    })
                     .into_any_element();
                 (i18n::t!("app.map.settings"), b, i18n::t!("app.map.save"), false, true, |this, cx| this.save_map_settings(cx))
             }

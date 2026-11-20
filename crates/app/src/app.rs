@@ -130,6 +130,9 @@ pub struct RamaApp {
     /// Branches deleted by cleanup this session, to restore (name, commit).
     pub undo: Vec<(String, Oid)>,
     pub agents: crate::agents_view::AgentBadges,
+    /// The agent conversation open in the map's side panel, and whether its tab shows.
+    pub convo: Option<crate::convo_view::Convo>,
+    pub convo_tab: bool,
     pub(crate) prompt_sub: Option<Subscription>,
     _subs: Vec<Subscription>,
 }
@@ -214,6 +217,8 @@ impl RamaApp {
             cleanup: None,
             undo: Vec::new(),
             agents: crate::agents_view::AgentBadges::default(),
+            convo: None,
+            convo_tab: false,
             prompt_sub: None,
             _subs: subs,
         };
@@ -298,6 +303,8 @@ impl RamaApp {
             self.cleanup = None;
             self.undo.clear();
             self.agents.clear();
+            self.convo = None;
+            self.convo_tab = false;
         }
         let wip = self.work.wip;
         self.refs_by_row = Rc::new(by_row);

@@ -179,7 +179,7 @@ pub fn sh_quote(s: &str) -> String {
     }
 }
 
-fn applescript_string(s: &str) -> String {
+pub(crate) fn applescript_string(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
