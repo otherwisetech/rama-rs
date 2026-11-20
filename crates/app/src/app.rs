@@ -223,6 +223,7 @@ impl RamaApp {
             _subs: subs,
         };
         this.check_git(cx);
+        crate::star::refresh(crate::settings::Settings::load().github_stars(), cx);
         if let Some(p) = initial {
             this.open(p, window, cx);
         }
@@ -610,6 +611,12 @@ impl RamaApp {
         }
     }
 
+    fn set_github_stars(&mut self, on: bool, cx: &mut Context<Self>) {
+        crate::settings::Settings::update(|s| s.github_stars = (!on).then(|| "off".into())); // i18n-ok: setting value
+        crate::star::refresh(on, cx);
+        cx.refresh_windows();
+    }
+
     // ── rendering ─────────────────────────────────────────────────────────────────────────────
 
     fn commit_count(h: &History) -> String {
@@ -658,6 +665,7 @@ impl RamaApp {
         let can_reload = matches!(self.phase, Phase::Ready | Phase::Failed { .. });
         let current = i18n::locale();
         let weak = cx.entity().downgrade();
+        let stars_on = crate::star::enabled(cx);
         let lang = Button::new("lang").ghost().icon(IconName::Globe).with_size(px(34.)).tooltip(i18n::t!("common.language")).dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
             menu = menu.label(i18n::t!("common.language"));
             for (code, name) in i18n::available() {
@@ -666,6 +674,11 @@ impl RamaApp {
                     w.update(cx, |this, cx| this.set_language(code, cx)).ok();
                 }));
             }
+            let w = weak.clone();
+            menu = menu.separator().item(PopupMenuItem::new(i18n::t!("app.star.setting")).checked(stars_on).on_click(move |_, _, cx| {
+                w.update(cx, |this, cx| this.set_github_stars(!stars_on, cx)).ok();
+            }));
+            menu = menu.label(i18n::t!("app.star.setting_hint"));
             let w = weak.clone();
             menu.separator().item(PopupMenuItem::new(i18n::t!("app.about.menu", app = crate::APP_NAME)).on_click(move |_, _, cx| {
                 w.update(cx, |this, cx| this.show_about(cx)).ok();
@@ -867,6 +880,7 @@ impl RamaApp {
             .text_color(t.ink_muted)
             .child(div().flex_1().min_w_0().truncate().child(left))
             .when(matches!(self.phase, Phase::Ready), |d| d.child(self.render_output_toggle(t, cx)))
+            .child(crate::star::footer_link(t, cx))
             .child(
                 div()
                     .id("footer-about")
@@ -916,7 +930,15 @@ impl RamaApp {
                     .child(div().text_size(px(12.)).text_color(t.ink_muted).child(i18n::t!("app.about.place"))),
             )
             .child(ui::filled_button(t, "about-site", t.accent).mt(px(4.)).child(i18n::t!("app.about.visit")).on_click(|_, _, cx| cx.open_url(crate::COMPANY_URL)))
-            .child(div().id("about-source").text_size(px(12.)).text_color(accent).cursor_pointer().hover(|s| s.underline()).child(i18n::t!("app.about.source")).on_click(|_, _, cx| cx.open_url(crate::REPO_URL)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(14.))
+                    .child(div().id("about-source").text_size(px(12.)).text_color(accent).cursor_pointer().hover(|s| s.underline()).child(i18n::t!("app.about.source")).on_click(|_, _, cx| cx.open_url(crate::REPO_URL)))
+                    .child(crate::star::about_button(t, cx)),
+            )
+            .child(crate::star::about_ask(t))
             .child(div().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.about.license")));
         div()
             .id("about-backdrop")

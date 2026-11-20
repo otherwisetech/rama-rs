@@ -14,6 +14,7 @@ mod map;
 mod map_view;
 mod robot;
 mod settings;
+mod star;
 mod sidebar;
 mod theme;
 mod transcript;
