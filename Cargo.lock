@@ -6111,11 +6111,14 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "libc",
  "notify",
  "objc",
  "rama-graph",
  "rama-i18n",
  "rama-repo",
+ "serde_json",
+ "sysinfo",
  "winresource",
 ]
 

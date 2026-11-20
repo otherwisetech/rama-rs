@@ -186,3 +186,16 @@ app.clean.gc_prune_body = With --prune=now, commits that are on no branch, tag o
 app.clean.undo_title = DELETED THIS SESSION
 app.clean.restore = Restore
 app.clean.restored = Restored {name}.
+app.map.set_badges = Show AI agents working in worktrees
+app.map.set_badges_hint = A small robot on the map and in the graph while claude, codex, opencode, pi, gemini or aider run in a worktree. Found from local processes and session files; nothing leaves your computer.
+app.map.set_reduce_motion = Reduce motion (the robots don't animate)
+app.agents.title = AI agents
+app.agents.working = working
+app.agents.waiting = waiting for you
+app.agents.idle = idle
+app.agents.line = {agent} · {state}
+app.agents.session = Session: {title}
+app.agents.started = Started {ago}
+app.agents.since = State changed {ago}
+app.agents.click_focus = Click to bring its terminal forward
+app.agents.click_open = Click to open a terminal here

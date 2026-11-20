@@ -63,6 +63,21 @@ Linux. UI in Spanish, English, Portuguese and French.
   *Prune…* previews `git worktree prune` before running it. *New worktree…* checks out an existing
   branch, a new branch or a commit into `../<repo>-<branch>` (or a folder you choose) and can start
   an agent once it exists.
+- **AI agents at work**: a tiny pixel-art robot types away on a worktree's map card (and list
+  row), on the graph's *Working copy* row and on the ref pill of a branch checked out in a
+  worktree where `claude`, `codex`, `opencode`, `pi`, `gemini` or `aider` is running. It rests
+  when the agent waits for you or is idle. Hover for the agent, its state (working / waiting for
+  you / idle), when it started and changed state, and the session title when Claude Code has one;
+  click to bring its terminal app forward (macOS) or open a terminal in the worktree. Found every
+  3 s, in the background and only while a rama window is on screen, from agent processes whose
+  working directory is in the worktree (the innermost one, so `.claude/worktrees/x` inside the
+  main checkout counts only for `x`) and Claude Code's session files
+  (`~/.claude/projects/<path with every non-alphanumeric character as ->/*.jsonl`): only their
+  modification time and the trailing entries' type and title are read; no conversation text is
+  shown, kept or logged, and nothing leaves the computer. Working = the session file changed in
+  the last 20 s or the agent's process tree uses CPU; waiting = Claude's last entry is an answer.
+  Other agents show working / idle from CPU only. Windows: session files only. Turn it off, or
+  stop the animation (*Reduce motion*), in the worktree settings.
 - Terminals: Terminal.app, iTerm2, Ghostty, Warp, WezTerm, kitty and Alacritty on macOS;
   `$TERMINAL`, GNOME Terminal, Konsole, kitty, Alacritty and WezTerm on Linux; Windows Terminal,
   PowerShell and cmd on Windows. The exact command line is shown the first time each terminal +

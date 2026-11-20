@@ -1,5 +1,6 @@
 //! The commit list: refs | graph | message | author | date | sha. The graph is painted per row
 //! (lines and curves in a `canvas`), with the commit as a coloured avatar on top.
+use crate::agents_view::BranchBadges;
 use crate::app::RamaApp;
 use crate::theme::{MONO, Tokens, tokens};
 use crate::util::{datetime, initials};
@@ -68,12 +69,13 @@ impl RamaApp {
         let (wip_x, wip_color) = head_row.map(|r| (lane_x(r.lane.min(lanes)), t.lane(r.color))).unwrap_or((lane_x(0), t.lane(0)));
         let wip = self.render_wip_row(t, wip_x, wip_color, graph_w, REFS_W, cx);
         let weak = cx.entity().downgrade();
+        let badges = self.branch_badges();
         let list = uniform_list(
             "commits",
             h.commits.len(),
             cx.processor(move |_this, range: std::ops::Range<usize>, _window, cx| {
                 let t = tokens(cx);
-                range.map(|ix| commit_row(&t, &h, &refs_by_row, mask.as_ref(), ix, graph_w, lanes, selected == Some(ix), weak.clone(), cx)).collect::<Vec<_>>()
+                range.map(|ix| commit_row(&t, &h, &refs_by_row, mask.as_ref(), ix, graph_w, lanes, selected == Some(ix), &badges, weak.clone(), cx)).collect::<Vec<_>>()
             }),
         )
         .track_scroll(&self.list_scroll)
@@ -93,7 +95,7 @@ impl RamaApp {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn commit_row(t: &Tokens, h: &Arc<History>, refs_by_row: &HashMap<usize, Vec<usize>>, mask: Option<&Rc<Vec<bool>>>, ix: usize, graph_w: f32, lanes: u16, selected: bool, weak: WeakEntity<RamaApp>, cx: &mut Context<RamaApp>) -> AnyElement {
+fn commit_row(t: &Tokens, h: &Arc<History>, refs_by_row: &HashMap<usize, Vec<usize>>, mask: Option<&Rc<Vec<bool>>>, ix: usize, graph_w: f32, lanes: u16, selected: bool, badges: &BranchBadges, weak: WeakEntity<RamaApp>, cx: &mut Context<RamaApp>) -> AnyElement {
     let c = &h.commits[ix];
     let row = &h.rows[ix];
     let color = t.lane(row.color);
@@ -105,7 +107,13 @@ fn commit_row(t: &Tokens, h: &Arc<History>, refs_by_row: &HashMap<usize, Vec<usi
 
     // refs: first one as a pill, the rest as "+N"
     let refs: Vec<&RefInfo> = refs_by_row.get(&ix).map(|v| v.iter().map(|&i| &h.refs[i]).collect()).unwrap_or_default();
-    let shown = pick_ref(&refs, h.head_branch.as_deref());
+    let shown = pick_ref(&refs, h.head_branch.as_deref(), badges);
+    // a branch with an agent at work in its worktree: the robot inside its pill, or next to
+    // the pill shown when that branch is folded into "+N"
+    let agent_branch = refs.iter().find(|r| r.kind == RefKind::Local && badges.has(&r.name)).map(|r| r.name.clone());
+    let in_pill = shown.is_some_and(|r| Some(&r.name) == agent_branch.as_ref() && r.kind == RefKind::Local);
+    let robot = agent_branch.and_then(|b| badges.badge(t, &b, 1.5, ("ref-agent", ix).into(), cx));
+    let (pill_robot, side_robot) = if in_pill { (robot, None) } else { (None, robot) };
     let refs_cell = div()
         .flex()
         .flex_none()
@@ -114,7 +122,8 @@ fn commit_row(t: &Tokens, h: &Arc<History>, refs_by_row: &HashMap<usize, Vec<usi
         .gap(px(4.))
         .w(px(REFS_W))
         .overflow_hidden()
-        .children(shown.map(|r| ref_pill(t, r, h.head_branch.as_deref() == Some(r.name.as_str()) && r.kind == RefKind::Local, color)))
+        .children(side_robot)
+        .children(shown.map(|r| ref_pill(t, r, h.head_branch.as_deref() == Some(r.name.as_str()) && r.kind == RefKind::Local, color).children(pill_robot)))
         .when(refs.len() > 1, |d| d.child(div().flex_none().px(px(5.)).rounded(px(5.)).bg(t.canvas).text_size(px(10.)).text_color(t.ink_muted).child(format!("+{}", refs.len() - 1))));
 
     // graph cell: edges in a canvas, the commit node on top
@@ -216,9 +225,11 @@ fn commit_row(t: &Tokens, h: &Arc<History>, refs_by_row: &HashMap<usize, Vec<usi
         .into_any_element()
 }
 
-/// The ref worth showing first: checked-out branch, then local, remote, tag.
-fn pick_ref<'a>(refs: &[&'a RefInfo], head: Option<&str>) -> Option<&'a RefInfo> {
-    refs.iter().copied().min_by_key(|r| (!(r.kind == RefKind::Local && Some(r.name.as_str()) == head), r.kind))
+/// The ref worth showing first: checked-out branch, then a branch with an agent at work, then
+/// local, remote, tag.
+fn pick_ref<'a>(refs: &[&'a RefInfo], head: Option<&str>, badges: &BranchBadges) -> Option<&'a RefInfo> {
+    let local = |r: &RefInfo| r.kind == RefKind::Local;
+    refs.iter().copied().min_by_key(|r| (!(local(r) && Some(r.name.as_str()) == head), !(local(r) && badges.has(&r.name)), r.kind))
 }
 
 pub fn ref_pill(t: &Tokens, r: &RefInfo, is_head: bool, lane: Hsla) -> Div {

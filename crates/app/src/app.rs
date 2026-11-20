@@ -127,6 +127,7 @@ pub struct RamaApp {
     pub cleanup: Option<crate::cleanup::CleanupState>,
     /// Branches deleted by cleanup this session, to restore (name, commit).
     pub undo: Vec<(String, Oid)>,
+    pub agents: crate::agents_view::AgentBadges,
     pub(crate) prompt_sub: Option<Subscription>,
     _subs: Vec<Subscription>,
 }
@@ -210,6 +211,7 @@ impl RamaApp {
             map: crate::map::MapState::default(),
             cleanup: None,
             undo: Vec::new(),
+            agents: crate::agents_view::AgentBadges::default(),
             prompt_sub: None,
             _subs: subs,
         };
@@ -293,6 +295,7 @@ impl RamaApp {
             self.map = crate::map::MapState::default();
             self.cleanup = None;
             self.undo.clear();
+            self.agents.clear();
         }
         let wip = self.work.wip;
         self.refs_by_row = Rc::new(by_row);
@@ -313,6 +316,7 @@ impl RamaApp {
         }
         self.refresh(false, cx);
         self.watch(root, cx);
+        self.start_agent_poll(cx);
         if self.map_view {
             self.show_map(true, cx);
         }

@@ -362,6 +362,7 @@ impl RamaApp {
                 .gap(z(6.))
                 .child(div().flex_none().size(z(9.)).rounded_full().bg(color))
                 .child(div().flex_1().min_w_0().truncate().text_size(z(13.)).font_weight(FontWeight::SEMIBOLD).child(title))
+                .children(self.agent_badge(t, &e.wt.path, 2. * zoom, ("map-card-agent", i), cx))
                 .when(e.wt.main, |d| d.child(div().flex_none().text_size(z(10.)).text_color(t.accent).child(i18n::t!("app.map.main")))),
         );
         card = card.child(line(Self::head_label(e), t.ink, 12.));
@@ -475,7 +476,7 @@ impl RamaApp {
                     .when(selected, |d| d.bg(t.accent_soft))
                     .when(!selected, |d| d.hover(move |s| s.bg(hover)))
                     .when(e.info.merged && !e.wt.main, |d| d.text_color(t.ink_muted))
-                    .child(div().flex().flex_1().min_w_0().items_center().gap(px(6.)).child(div().flex_none().size(px(8.)).rounded_full().bg(color)).child(div().truncate().when(e.wt.main, |d| d.font_weight(FontWeight::SEMIBOLD)).child(if e.wt.main { self.repo.as_ref().map(|r| r.name()).unwrap_or_default() } else { short_path(&e.wt.path, main_path.as_deref()) })))
+                    .child(div().flex().flex_1().min_w_0().items_center().gap(px(6.)).child(div().flex_none().size(px(8.)).rounded_full().bg(color)).children(self.agent_badge(t, &e.wt.path, 1.5, ("map-row-agent", k), cx)).child(div().truncate().when(e.wt.main, |d| d.font_weight(FontWeight::SEMIBOLD)).child(if e.wt.main { self.repo.as_ref().map(|r| r.name()).unwrap_or_default() } else { short_path(&e.wt.path, main_path.as_deref()) })))
                     .child(div().flex_none().w(px(200.)).truncate().child(Self::head_label(e)))
                     .child(div().flex_none().w(px(150.)).truncate().text_size(px(11.5)).text_color(t.ink_muted).child(dist.join(" · "))) // i18n-ok: separator
                     .child(div().flex_none().w(px(90.)).text_size(px(11.5)).text_color(if changed > 0 { t.accent } else { t.ink_muted }).child(if changed > 0 { i18n::tn!("app.map.changed", changed) } else { i18n::t!("app.wip.clean") }))
@@ -542,6 +543,12 @@ impl RamaApp {
             .child(div().font_family(MONO).text_size(px(11.)).text_color(t.ink_muted).child(e.wt.path.display().to_string()))
             .child(div().flex().flex_wrap().gap(px(4.)).children(self.flags(t, &e).into_iter().map(|(f, c)| div().px(px(6.)).rounded(px(5.)).bg(c.opacity(0.14)).text_color(c).text_size(px(11.)).child(f))))
             .child(kv(i18n::t!("app.map.col_branch"), Self::head_label(&e)));
+        if let Some(found) = self.agents.found.get(&e.wt.path) {
+            let mut lines = crate::agents_view::describe(found, now());
+            lines.pop();
+            let robot = self.agent_badge(t, &e.wt.path, 2., "panel-agent", cx);
+            info = info.child(div().flex().items_start().gap(px(8.)).children(robot).child(div().flex_1().min_w_0().child(kv(i18n::t!("app.agents.title"), lines.join("\n")))));
+        }
         if let Some(up) = &e.info.upstream {
             info = info.child(kv(i18n::t!("app.map.upstream"), if e.info.gone { i18n::t!("app.map.upstream_gone", upstream = up) } else { format!("{up}  {}", ab(e.info.ahead, e.info.behind)) })); // i18n-ok: name and arrows
         }
@@ -783,6 +790,19 @@ impl RamaApp {
                     .child(Input::new(&f.agents))
                     .child(hint(i18n::t!("app.map.set_agents_hint")))
                     .child(div().flex().items_center().gap(px(8.)).child(label(i18n::t!("app.map.set_terminal"))).child(term))
+                    .child(Checkbox::new("set-badges").small().label(i18n::t!("app.map.set_badges")).checked(f.badges).on_click(cx.listener(|this, on: &bool, _, cx| {
+                        if let Some(Dialog::Settings(f)) = this.map.dialog.as_mut() {
+                            f.badges = *on;
+                        }
+                        cx.notify();
+                    })))
+                    .child(hint(i18n::t!("app.map.set_badges_hint")))
+                    .child(Checkbox::new("set-motion").small().label(i18n::t!("app.map.set_reduce_motion")).checked(f.reduce_motion).on_click(cx.listener(|this, on: &bool, _, cx| {
+                        if let Some(Dialog::Settings(f)) = this.map.dialog.as_mut() {
+                            f.reduce_motion = *on;
+                        }
+                        cx.notify();
+                    })))
                     .into_any_element();
                 (i18n::t!("app.map.settings"), b, i18n::t!("app.map.save"), false, true, |this, cx| this.save_map_settings(cx))
             }

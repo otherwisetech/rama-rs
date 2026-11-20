@@ -186,3 +186,16 @@ app.clean.gc_prune_body = Avec --prune=now, les commits qui ne sont sur aucune b
 app.clean.undo_title = SUPPRIMÉES PENDANT CETTE SESSION
 app.clean.restore = Restaurer
 app.clean.restored = {name} restaurée.
+app.map.set_badges = Afficher les agents IA au travail dans les worktrees
+app.map.set_badges_hint = Un petit robot sur la carte et dans le graphe pendant que claude, codex, opencode, pi, gemini ou aider tournent dans un worktree. Détectés via les processus locaux et les fichiers de session ; rien ne quitte votre ordinateur.
+app.map.set_reduce_motion = Réduire les animations (les robots restent immobiles)
+app.agents.title = Agents IA
+app.agents.working = au travail
+app.agents.waiting = vous attend
+app.agents.idle = inactif
+app.agents.line = {agent} · {state}
+app.agents.session = Session : {title}
+app.agents.started = Démarré {ago}
+app.agents.since = Changement d’état {ago}
+app.agents.click_focus = Cliquez pour ramener son terminal au premier plan
+app.agents.click_open = Cliquez pour ouvrir un terminal ici

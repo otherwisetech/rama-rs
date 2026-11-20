@@ -58,6 +58,7 @@ impl RamaApp {
         let clean = s.is_clean();
         let counts = if clean { i18n::t!("app.wip.clean") } else { format!("{} · {}", i18n::tn!("app.wip.changes", n), i18n::tn!("app.wip.staged", s.staged.len())) }; // i18n-ok: separator
         let color = if clean { t.border_strong } else { color };
+        let agent = self.agents.current.clone().and_then(|p| self.agent_badge(t, &p, 2., "wip-agent", cx));
         let graph = div()
             .relative()
             .flex_none()
@@ -82,6 +83,7 @@ impl RamaApp {
                 .child(div().flex_none().w(px(refs_w)))
                 .child(graph)
                 .child(div().flex_none().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).when(clean, |d| d.text_color(t.ink_muted)).child(i18n::t!("app.wip.title")))
+                .children(agent)
                 .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(if clean { t.ink_muted } else { t.accent }).child(counts))
                 .when(!clean, |d| d.child(div().flex_none().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.wip.open_hint"))))
                 .on_click(cx.listener(|this, _, window, cx| {

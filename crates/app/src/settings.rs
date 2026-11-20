@@ -23,6 +23,10 @@ pub struct Settings {
     /// Worktree map: `"list"` or the map, and `"grouped"` or the radial layout.
     pub map_mode: Option<String>,
     pub map_layout: Option<String>,
+    /// `"off"` hides the AI agent badges (and stops looking for agents).
+    pub agent_badges: Option<String>,
+    /// `"on"`: badges don't animate.
+    pub reduce_motion: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,11 +96,13 @@ impl Settings {
             launch_ok: list("launch_ok"),
             map_mode: st("map_mode"),
             map_layout: st("map_layout"),
+            agent_badges: st("agent_badges"),
+            reduce_motion: st("reduce_motion"),
         }
     }
 
     fn to_json(&self) -> String {
-        let strings = [("language", &self.language), ("branch_sort", &self.branch_sort), ("default_branch", &self.default_branch), ("worktree_base", &self.worktree_base), ("terminal", &self.terminal), ("map_mode", &self.map_mode), ("map_layout", &self.map_layout)];
+        let strings = [("language", &self.language), ("branch_sort", &self.branch_sort), ("default_branch", &self.default_branch), ("worktree_base", &self.worktree_base), ("terminal", &self.terminal), ("map_mode", &self.map_mode), ("map_layout", &self.map_layout), ("agent_badges", &self.agent_badges), ("reduce_motion", &self.reduce_motion)];
         let lists = [("protected", &self.protected), ("agents", &self.agents), ("launch_ok", &self.launch_ok)];
         let mut fields: Vec<String> = strings.iter().filter_map(|(k, v)| v.as_ref().map(|v| format!("  \"{k}\": {}", quote(v)))).collect();
         fields.extend(lists.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| format!("  \"{k}\": [{}]", v.iter().map(|x| quote(x)).collect::<Vec<_>>().join(", "))));
@@ -105,6 +111,14 @@ impl Settings {
 
     pub fn side_recent(&self) -> bool {
         self.branch_sort.as_deref() == Some("recent")
+    }
+
+    pub fn agent_badges(&self) -> bool {
+        self.agent_badges.as_deref() != Some("off")
+    }
+
+    pub fn reduce_motion(&self) -> bool {
+        self.reduce_motion.as_deref() == Some("on")
     }
 
     pub fn protected_patterns(&self) -> Vec<String> {
@@ -280,9 +294,13 @@ mod tests {
             launch_ok: vec!["ghostty|claude".into()],
             map_mode: Some("list".into()),
             map_layout: Some("grouped".into()),
+            agent_badges: Some("off".into()),
+            reduce_motion: Some("on".into()),
         };
         assert_eq!(Settings::parse(&s.to_json()), s);
         assert!(s.side_recent());
+        assert!(!s.agent_badges() && s.reduce_motion());
+        assert!(Settings::default().agent_badges() && !Settings::default().reduce_motion());
         assert_eq!(Settings::parse(&Settings::default().to_json()), Settings::default());
         assert_eq!(Settings::parse("garbage"), Settings::default());
         // files written by older versions
