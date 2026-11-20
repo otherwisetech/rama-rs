@@ -6104,7 +6104,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rama-app"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6124,15 +6124,15 @@ dependencies = [
 
 [[package]]
 name = "rama-graph"
-version = "0.2.2"
+version = "0.2.3"
 
 [[package]]
 name = "rama-i18n"
-version = "0.2.2"
+version = "0.2.3"
 
 [[package]]
 name = "rama-repo"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "gix",
  "libc",
