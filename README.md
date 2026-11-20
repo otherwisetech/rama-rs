@@ -63,6 +63,33 @@ Linux. UI in Spanish, English, Portuguese and French.
   *Prune…* previews `git worktree prune` before running it. *New worktree…* checks out an existing
   branch, a new branch or a commit into `../<repo>-<branch>` (or a folder you choose) and can start
   an agent once it exists.
+- **AI agents at work**: a tiny pixel-art robot on a worktree's map card (and list row), on
+  the graph's *Working copy* row and on the ref pill of a branch checked out in a worktree where
+  `claude`, `codex`, `opencode`, `pi`, `gemini` or `aider` is running. It types while the agent
+  works, **raises a hand** with an amber "!" when the agent needs you (a permission prompt, its
+  question tool, or a last answer that ends in a question), rests when it's your turn or the
+  agent is idle, and turns **red with a broken face** on an error (rate limit, overload,
+  connection, API or sign-in error, or the process stopping mid-work). A legend sits under the
+  map; agents that need you sort first; an optional macOS notification tells you once each time
+  one starts needing you. Hover for the agent, its state, the session title, how many
+  processes serve it, when it started and changed state; click to bring its terminal app forward
+  (macOS) or open a terminal in the worktree. Each session is listed once.
+  Found every 3 s, in the background and only while a rama window is on screen, from agent
+  processes whose working directory is in the worktree (the innermost one, so
+  `.claude/worktrees/x` inside the main checkout counts only for `x`) and Claude Code's own
+  records: `~/.claude/sessions/<pid>.json` (session id and status) and the session log
+  `~/.claude/projects/<path with every non-alphanumeric character as ->/<id>.jsonl`, of which
+  the badge reads only the modification time and the last entries' type, stop reason, pending
+  tool, error kind, trailing "?" and title. Other agents show working / idle from CPU only.
+  Windows: session files only. Turn it off, stop the animation (*Reduce motion*) or turn on
+  notifications in the worktree settings.
+- **Agent conversations**: in the map's side panel each agent is a row; click it for the
+  *Conversation* tab: the session's messages, read-only, newest at the bottom and following new
+  ones while you're at the bottom, tool calls folded to one line ("Edited src/x.rs",
+  "Ran `cargo test`") that open to show their input and output, a find field, *Load earlier
+  messages* (the last 2 MB are read first, up to 64 MB) and *Open in terminal*. The log is read
+  only while the tab is open, only from this computer, and never written, sent or logged. Codex
+  and the other agents: transcript not available.
 - Terminals: Terminal.app, iTerm2, Ghostty, Warp, WezTerm, kitty and Alacritty on macOS;
   `$TERMINAL`, GNOME Terminal, Konsole, kitty, Alacritty and WezTerm on Linux; Windows Terminal,
   PowerShell and cmd on Windows. The exact command line is shown the first time each terminal +

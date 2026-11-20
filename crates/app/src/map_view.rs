@@ -91,6 +91,14 @@ fn short_path(p: &Path, main: Option<&Path>) -> String {
     p.display().to_string()
 }
 
+/// The map's toolbar loses its button labels when the column between the sidebar and the side
+/// panel is narrower than this.
+const TOOLBAR_FULL_W: f32 = 900.;
+
+fn toolbar_compact(window_w: f32) -> bool {
+    window_w - crate::sidebar::SIDE_W - DETAIL_W < TOOLBAR_FULL_W
+}
+
 fn ab(a: u32, b: u32) -> String {
     format!("↑{a} ↓{b}") // i18n-ok: arrows
 }
@@ -150,8 +158,8 @@ impl RamaApp {
         }
     }
 
-    pub(crate) fn render_map(&mut self, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
-        let toolbar = self.map_toolbar(t, cx);
+    pub(crate) fn render_map(&mut self, t: &Tokens, window_w: f32, cx: &mut Context<Self>) -> AnyElement {
+        let toolbar = self.map_toolbar(t, toolbar_compact(window_w), cx);
         let body: AnyElement = match &self.map.entries {
             None => div().size_full().flex().items_center().justify_center().gap(px(8.)).text_color(t.ink_muted).child(Spinner::new().small().color(t.accent)).child(i18n::t!("app.map.loading")).into_any_element(),
             Some(Err(e)) => div().size_full().flex().items_center().justify_center().text_color(t.danger).child(e.clone()).into_any_element(),
@@ -160,14 +168,15 @@ impl RamaApp {
                 if self.map.list { self.map_list(t, &list, cx) } else { self.map_canvas(t, &list, cx) }
             }
         };
-        div().flex().flex_col().size_full().bg(t.canvas).child(toolbar).child(div().flex_1().min_h_0().child(body)).into_any_element()
+        div().flex().flex_col().size_full().bg(t.canvas).child(toolbar).child(div().flex_1().min_h_0().child(body)).children(self.agent_legend(t)).into_any_element()
     }
 
-    fn map_toolbar(&self, t: &Tokens, cx: &mut Context<Self>) -> Div {
+    /// Wraps onto more rows when narrow; `compact` drops the button labels (kept as tooltips).
+    fn map_toolbar(&self, t: &Tokens, compact: bool, cx: &mut Context<Self>) -> Div {
         let seg = |id: &'static str, label: String, on: bool| {
             div().id(id).flex().items_center().h(px(26.)).px(px(10.)).rounded(px(7.)).text_size(px(12.)).cursor_pointer().when(on, |d| d.bg(t.surface).font_weight(FontWeight::SEMIBOLD).shadow_sm()).when(!on, |d| d.text_color(t.ink_muted)).child(label)
         };
-        let group = |a: Stateful<Div>, b: Stateful<Div>| div().flex().items_center().gap(px(2.)).p(px(2.)).rounded(px(9.)).bg(t.border.opacity(0.6)).child(a).child(b);
+        let group = |a: Stateful<Div>, b: Stateful<Div>| div().flex().flex_none().items_center().gap(px(2.)).p(px(2.)).rounded(px(9.)).bg(t.border.opacity(0.6)).child(a).child(b);
         let list = self.map.list;
         let mode = group(seg("map-mode-map", i18n::t!("app.map.mode_map"), !list).on_click(cx.listener(|this, _, _, cx| this.set_map_mode(false, cx))), seg("map-mode-list", i18n::t!("app.map.mode_list"), list).on_click(cx.listener(|this, _, _, cx| this.set_map_mode(true, cx))));
         let grouped = self.map.grouped;
@@ -175,13 +184,17 @@ impl RamaApp {
         let small = |id: &'static str, ic: IconName, tip: String| ui::icon_button(t, id, ic, true).size(px(28.)).rounded(px(7.)).tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx));
         let zoom = div()
             .flex()
+            .flex_none()
             .items_center()
             .gap(px(2.))
             .child(small("map-zoom-out", IconName::Minus, i18n::t!("app.map.zoom_out")).on_click(cx.listener(|this, _, _, cx| this.map_zoom_key(Some(1. / 1.2), cx))))
             .child(div().id("map-zoom-reset").w(px(44.)).text_center().text_size(px(11.5)).text_color(t.ink_muted).cursor_pointer().child(format!("{:.0}%", self.map.zoom * 100.)).on_click(cx.listener(|this, _, _, cx| this.map_zoom_key(None, cx))))
             .child(small("map-zoom-in", IconName::Plus, i18n::t!("app.map.zoom_in")).on_click(cx.listener(|this, _, _, cx| this.map_zoom_key(Some(1.2), cx))));
         let busy = self.work.job.is_some();
-        let btn = |id: &'static str, ic: IconName, label: String| ui::outline_button(t, id).h(px(30.)).px(px(10.)).text_size(px(12.5)).child(icon(ic, 14., t.ink)).child(label).when(busy, |d| d.opacity(0.5));
+        let btn = |id: &'static str, ic: IconName, label: String| {
+            let b = ui::outline_button(t, id).h(px(30.)).px(px(if compact { 8. } else { 10. })).text_size(px(12.5)).child(icon(ic, 14., t.ink)).when(busy, |d| d.opacity(0.5));
+            if compact { b.tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx)) } else { b.child(label) }
+        };
         let count = self.map.list().map(|l| i18n::tn!("app.map.count", l.len())).unwrap_or_default();
         div()
             .flex()
@@ -197,7 +210,7 @@ impl RamaApp {
             .child(mode)
             .when(!list, |d| d.child(layout).child(zoom))
             .when(list, |d| d.child(self.sort_menu(t, cx)))
-            .child(div().text_size(px(12.)).text_color(t.ink_muted).child(count))
+            .child(div().flex_none().text_size(px(12.)).text_color(t.ink_muted).child(count))
             .when(self.map.loading, |d| d.child(Spinner::new().small().color(t.accent)))
             .child(div().flex_1())
             .child(small("map-refresh", IconName::Redo, i18n::t!("app.map.refresh")).on_click(cx.listener(|this, _, _, cx| this.reload_map(true, cx))))
@@ -362,6 +375,7 @@ impl RamaApp {
                 .gap(z(6.))
                 .child(div().flex_none().size(z(9.)).rounded_full().bg(color))
                 .child(div().flex_1().min_w_0().truncate().text_size(z(13.)).font_weight(FontWeight::SEMIBOLD).child(title))
+                .children(self.agent_badge(t, &e.wt.path, 2. * zoom, ("map-card-agent", i), cx))
                 .when(e.wt.main, |d| d.child(div().flex_none().text_size(z(10.)).text_color(t.accent).child(i18n::t!("app.map.main")))),
         );
         card = card.child(line(Self::head_label(e), t.ink, 12.));
@@ -399,6 +413,7 @@ impl RamaApp {
         card.on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
             cx.stop_propagation();
             this.map.selected = Some(path.clone());
+            this.convo_tab = false;
             if ev.click_count() == 2 {
                 this.open_in_new_window(path.clone(), cx);
             }
@@ -475,7 +490,7 @@ impl RamaApp {
                     .when(selected, |d| d.bg(t.accent_soft))
                     .when(!selected, |d| d.hover(move |s| s.bg(hover)))
                     .when(e.info.merged && !e.wt.main, |d| d.text_color(t.ink_muted))
-                    .child(div().flex().flex_1().min_w_0().items_center().gap(px(6.)).child(div().flex_none().size(px(8.)).rounded_full().bg(color)).child(div().truncate().when(e.wt.main, |d| d.font_weight(FontWeight::SEMIBOLD)).child(if e.wt.main { self.repo.as_ref().map(|r| r.name()).unwrap_or_default() } else { short_path(&e.wt.path, main_path.as_deref()) })))
+                    .child(div().flex().flex_1().min_w_0().items_center().gap(px(6.)).child(div().flex_none().size(px(8.)).rounded_full().bg(color)).children(self.agent_badge(t, &e.wt.path, 1.5, ("map-row-agent", k), cx)).child(div().truncate().when(e.wt.main, |d| d.font_weight(FontWeight::SEMIBOLD)).child(if e.wt.main { self.repo.as_ref().map(|r| r.name()).unwrap_or_default() } else { short_path(&e.wt.path, main_path.as_deref()) })))
                     .child(div().flex_none().w(px(200.)).truncate().child(Self::head_label(e)))
                     .child(div().flex_none().w(px(150.)).truncate().text_size(px(11.5)).text_color(t.ink_muted).child(dist.join(" · "))) // i18n-ok: separator
                     .child(div().flex_none().w(px(90.)).text_size(px(11.5)).text_color(if changed > 0 { t.accent } else { t.ink_muted }).child(if changed > 0 { i18n::tn!("app.map.changed", changed) } else { i18n::t!("app.wip.clean") }))
@@ -484,6 +499,7 @@ impl RamaApp {
                     .child(div().flex_none().w(px(140.)).flex().gap(px(3.)).overflow_hidden().children(self.flags(t, e).into_iter().map(|(f, c)| div().flex_none().px(px(5.)).rounded(px(4.)).bg(c.opacity(0.14)).text_color(c).text_size(px(10.)).child(f))))
                     .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                         this.map.selected = Some(path.clone());
+            this.convo_tab = false;
                         if ev.click_count() == 2 {
                             this.open_in_new_window(path.clone(), cx);
                         }
@@ -508,6 +524,39 @@ impl RamaApp {
     }
 
     pub(crate) fn render_map_panel(&self, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        if self.convo.is_some() {
+            let tab = |id: &'static str, label: String, on: bool| div().id(id).flex().items_center().h(px(26.)).px(px(10.)).rounded(px(7.)).text_size(px(12.)).cursor_pointer().when(on, |d| d.bg(t.surface).font_weight(FontWeight::SEMIBOLD).shadow_sm()).when(!on, |d| d.text_color(t.ink_muted)).child(label);
+            let convo = self.convo_tab;
+            let tabs = div()
+                .flex()
+                .flex_none()
+                .p(px(8.))
+                .border_b_1()
+                .border_color(t.border)
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(2.))
+                        .p(px(2.))
+                        .rounded(px(9.))
+                        .bg(t.border.opacity(0.6))
+                        .child(tab("panel-details", i18n::t!("app.convo.tab_details"), !convo).on_click(cx.listener(|this, _, _, cx| {
+                            this.convo_tab = false;
+                            cx.notify();
+                        })))
+                        .child(tab("panel-convo", i18n::t!("app.convo.tab"), convo).on_click(cx.listener(|this, _, _, cx| {
+                            this.convo_tab = true;
+                            this.refresh_convo(cx);
+                            cx.notify();
+                        }))),
+                );
+            let body = if convo { self.render_convo(t, cx) } else { self.render_map_details(t, cx) };
+            return div().flex().flex_col().flex_none().w(px(DETAIL_W)).h_full().bg(t.surface).border_l_1().border_color(t.border).child(tabs).child(div().flex().flex_col().flex_1().min_h_0().child(body)).into_any_element();
+        }
+        self.render_map_details(t, cx)
+    }
+
+    fn render_map_details(&self, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let panel = div().id("map-panel").flex().flex_col().flex_none().w(px(DETAIL_W)).h_full().bg(t.surface).border_l_1().border_color(t.border).overflow_y_scroll();
         let Some(list) = self.map.list() else { return panel.into_any_element() };
         let Some(e) = self.map.selected.as_ref().and_then(|p| self.map.entry(p)).cloned() else {
@@ -542,6 +591,9 @@ impl RamaApp {
             .child(div().font_family(MONO).text_size(px(11.)).text_color(t.ink_muted).child(e.wt.path.display().to_string()))
             .child(div().flex().flex_wrap().gap(px(4.)).children(self.flags(t, &e).into_iter().map(|(f, c)| div().px(px(6.)).rounded(px(5.)).bg(c.opacity(0.14)).text_color(c).text_size(px(11.)).child(f))))
             .child(kv(i18n::t!("app.map.col_branch"), Self::head_label(&e)));
+        if let Some(rows) = self.agent_rows(t, &e.wt.path, cx) {
+            info = info.child(rows);
+        }
         if let Some(up) = &e.info.upstream {
             info = info.child(kv(i18n::t!("app.map.upstream"), if e.info.gone { i18n::t!("app.map.upstream_gone", upstream = up) } else { format!("{up}  {}", ab(e.info.ahead, e.info.behind)) })); // i18n-ok: name and arrows
         }
@@ -783,6 +835,27 @@ impl RamaApp {
                     .child(Input::new(&f.agents))
                     .child(hint(i18n::t!("app.map.set_agents_hint")))
                     .child(div().flex().items_center().gap(px(8.)).child(label(i18n::t!("app.map.set_terminal"))).child(term))
+                    .child(Checkbox::new("set-badges").small().label(i18n::t!("app.map.set_badges")).checked(f.badges).on_click(cx.listener(|this, on: &bool, _, cx| {
+                        if let Some(Dialog::Settings(f)) = this.map.dialog.as_mut() {
+                            f.badges = *on;
+                        }
+                        cx.notify();
+                    })))
+                    .child(hint(i18n::t!("app.map.set_badges_hint")))
+                    .child(Checkbox::new("set-motion").small().label(i18n::t!("app.map.set_reduce_motion")).checked(f.reduce_motion).on_click(cx.listener(|this, on: &bool, _, cx| {
+                        if let Some(Dialog::Settings(f)) = this.map.dialog.as_mut() {
+                            f.reduce_motion = *on;
+                        }
+                        cx.notify();
+                    })))
+                    .when(cfg!(target_os = "macos"), |d| {
+                        d.child(Checkbox::new("set-notify").small().label(i18n::t!("app.map.set_notify")).checked(f.notify).on_click(cx.listener(|this, on: &bool, _, cx| {
+                            if let Some(Dialog::Settings(f)) = this.map.dialog.as_mut() {
+                                f.notify = *on;
+                            }
+                            cx.notify();
+                        })))
+                    })
                     .into_any_element();
                 (i18n::t!("app.map.settings"), b, i18n::t!("app.map.save"), false, true, |this, cx| this.save_map_settings(cx))
             }
@@ -865,7 +938,7 @@ impl NodeMenu {
 
 #[cfg(test)]
 mod tests {
-    use super::{CARD_H, CARD_W, layout, short_path};
+    use super::{CARD_H, CARD_W, layout, short_path, toolbar_compact};
     use repo::{Worktree, WorktreeEntry, WorktreeInfo};
     use std::path::{Path, PathBuf};
 
@@ -892,5 +965,6 @@ mod tests {
         assert!(pos[2].0 < 0. && pos[2].0 == pos[3].0);
         assert!(pos[4].0 > 0., "a dev worktree sits in the dev column");
         assert_eq!(short_path(Path::new("/r/.worktrees/x"), Some(Path::new("/r"))), ".worktrees/x");
+        assert!(toolbar_compact(1000.) && toolbar_compact(1280.) && !toolbar_compact(1920.));
     }
 }

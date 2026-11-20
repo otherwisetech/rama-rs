@@ -31,6 +31,8 @@ const FILTER_KEYS: &str = "Ctrl+Shift+F"; // i18n-ok: shortcut
 const MAP_KEYS: &str = "⌘M"; // i18n-ok: shortcut
 #[cfg(not(target_os = "macos"))]
 const MAP_KEYS: &str = "Ctrl+M"; // i18n-ok: shortcut
+const SEARCH_MIN: f32 = 180.;
+const SEARCH_MAX: f32 = 520.;
 const TOAST_FOR: Duration = Duration::from_secs(4);
 /// Commits loaded per repository; enough for years of history in most projects.
 pub(crate) const HISTORY_LIMIT: usize = 50_000;
@@ -127,6 +129,10 @@ pub struct RamaApp {
     pub cleanup: Option<crate::cleanup::CleanupState>,
     /// Branches deleted by cleanup this session, to restore (name, commit).
     pub undo: Vec<(String, Oid)>,
+    pub agents: crate::agents_view::AgentBadges,
+    /// The agent conversation open in the map's side panel, and whether its tab shows.
+    pub convo: Option<crate::convo_view::Convo>,
+    pub convo_tab: bool,
     pub(crate) prompt_sub: Option<Subscription>,
     _subs: Vec<Subscription>,
 }
@@ -210,6 +216,9 @@ impl RamaApp {
             map: crate::map::MapState::default(),
             cleanup: None,
             undo: Vec::new(),
+            agents: crate::agents_view::AgentBadges::default(),
+            convo: None,
+            convo_tab: false,
             prompt_sub: None,
             _subs: subs,
         };
@@ -293,6 +302,9 @@ impl RamaApp {
             self.map = crate::map::MapState::default();
             self.cleanup = None;
             self.undo.clear();
+            self.agents.clear();
+            self.convo = None;
+            self.convo_tab = false;
         }
         let wip = self.work.wip;
         self.refs_by_row = Rc::new(by_row);
@@ -313,6 +325,7 @@ impl RamaApp {
         }
         self.refresh(false, cx);
         self.watch(root, cx);
+        self.start_agent_poll(cx);
         if self.map_view {
             self.show_map(true, cx);
         }
@@ -599,18 +612,46 @@ impl RamaApp {
 
     // ── rendering ─────────────────────────────────────────────────────────────────────────────
 
-    fn render_topbar(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut left = div().flex().items_center().gap(px(10.)).min_w_0().flex_1();
+    fn commit_count(h: &History) -> String {
+        if h.truncated { i18n::t!("app.topbar.commits_truncated", n = group(h.commits.len())) } else { i18n::tn!("app.topbar.commits", h.commits.len(), count = group(h.commits.len())) }
+    }
+
+    fn render_topbar(&self, t: &Tokens, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let bar = topbar_mode(width);
+        let ready = matches!(self.phase, Phase::Ready);
+        let mut left = div().flex().items_center().gap(px(10.)).min_w_0().flex_shrink_1();
         left = left.child(div().flex().flex_none().items_center().justify_center().size(px(30.)).rounded(px(8.)).bg(t.brand).child(svg().path(crate::LOGO_SVG).size(px(17.)).text_color(gpui::white())));
         match (&self.repo, &self.history, &self.phase) {
             (Some(repo), Some(h), Phase::Ready) => {
                 let branch = h.head_branch.clone().unwrap_or_else(|| i18n::t!("app.topbar.detached", sha = h.head.map(|id| id.to_hex_with_len(7).to_string()).unwrap_or_default()));
-                let count = if h.truncated { i18n::t!("app.topbar.commits_truncated", n = group(h.commits.len())) } else { i18n::tn!("app.topbar.commits", h.commits.len(), count = group(h.commits.len())) };
+                let tip = (branch.clone(), Self::commit_count(h));
+                let muted = t.ink_muted;
+                // the view switch never shrinks; the repo name and the branch truncate instead
                 left = left
-                    .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).truncate().child(repo.name()))
-                    .child(div().flex().flex_none().items_center().gap(px(5.)).px(px(9.)).py(px(3.)).rounded_full().bg(t.accent_soft).text_color(t.accent).text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(ui::branch_icon(12., t.accent)).child(branch))
-                    .child(div().flex_none().text_size(px(12.)).text_color(t.ink_muted).child(count))
-                    .child(self.render_view_toggle(t, cx));
+                    .child(div().min_w(px(40.)).flex_shrink_1().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).truncate().child(repo.name()))
+                    .child(self.render_view_toggle(t, cx))
+                    .child(
+                        div()
+                            .id("branch-pill")
+                            .flex()
+                            .flex_shrink_1()
+                            .min_w(px(64.))
+                            .items_center()
+                            .gap(px(5.))
+                            .px(px(9.))
+                            .py(px(3.))
+                            .rounded_full()
+                            .bg(t.accent_soft)
+                            .text_color(t.accent)
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(ui::branch_icon(12., t.accent))
+                            .child(div().min_w_0().truncate().child(branch))
+                            .tooltip(move |window, cx| {
+                                let (b, n) = tip.clone();
+                                gpui_component::tooltip::Tooltip::element(move |_, _| div().flex().flex_col().child(b.clone()).child(div().text_color(muted).child(n.clone()))).build(window, cx)
+                            }),
+                    );
             }
             _ => left = left.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(crate::APP_NAME)),
         }
@@ -630,21 +671,41 @@ impl RamaApp {
                 w.update(cx, |this, cx| this.show_about(cx)).ok();
             }))
         });
-        div()
+        let compact = bar != Bar::Full;
+        let open_tip = i18n::t!("app.topbar.open");
+        let open = ui::outline_button(t, "open")
+            .child(icon(IconName::FolderOpen, 15., t.ink))
+            .when(compact, |d| d.px(px(9.)).tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(open_tip.clone()).build(window, cx)))
+            .when(!compact, |d| d.child(i18n::t!("app.topbar.open")))
+            .on_click(cx.listener(|this, _, window, cx| this.open_dialog(window, cx)));
+        let tools = div()
             .flex()
             .flex_none()
             .items_center()
             .gap(px(8.))
+            .child(ui::icon_button(t, "reload", IconName::Redo, can_reload).when(can_reload, |d| d.on_click(cx.listener(|this, _, window, cx| this.reload(window, cx)))))
+            .child(open)
+            .child(lang);
+        let one_row = bar != Bar::TwoRows;
+        let row1 = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
             .h(px(52.))
+            .child(left)
+            .child(div().flex_1())
+            .when(ready && one_row, |d| d.child(self.render_search(t, false, cx)).child(self.render_remote_buttons(t, compact, cx)))
+            .child(tools);
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
             .px(px(12.))
             .border_b_1()
             .border_color(t.border)
             .bg(t.surface)
-            .child(left)
-            .when(matches!(self.phase, Phase::Ready), |d| d.child(self.render_search(t, cx)).child(self.render_remote_buttons(t, cx)))
-            .child(ui::icon_button(t, "reload", IconName::Redo, can_reload).when(can_reload, |d| d.on_click(cx.listener(|this, _, window, cx| this.reload(window, cx)))))
-            .child(ui::outline_button(t, "open").child(icon(IconName::FolderOpen, 15., t.ink)).child(i18n::t!("app.topbar.open")).on_click(cx.listener(|this, _, window, cx| this.open_dialog(window, cx))))
-            .child(lang)
+            .child(row1)
+            .when(ready && !one_row, |d| d.child(div().flex().items_center().gap(px(8.)).pb(px(9.)).child(self.render_search(t, true, cx)).child(self.render_remote_buttons(t, true, cx))))
     }
 
     /// Graph | Map switch (⌘M).
@@ -669,7 +730,9 @@ impl RamaApp {
             .child(seg("view-map", IconName::Map, i18n::t!("app.map.tab"), map).on_click(cx.listener(|this, _, _, cx| this.show_map(true, cx))))
     }
 
-    fn render_search(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Flexible: up to 520 px, and the first thing to give way (down to 180 px) when the bar is
+    /// short of room. `fill`: the second row, where it takes what the buttons leave.
+    fn render_search(&self, t: &Tokens, fill: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.matches.as_ref().map(|m| {
             if m.is_empty() {
                 (i18n::t!("app.search.none"), t.danger)
@@ -681,15 +744,14 @@ impl RamaApp {
             ui::icon_button(t, id, ic, true).size(px(24.)).on_click(cx.listener(move |this, _, window, cx| this.step_match(delta, window, cx)))
         };
         let has = self.matches.as_ref().is_some_and(|m| !m.is_empty());
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(6.))
-            .w(px(320.))
-            .flex_shrink_1()
-            .min_w(px(160.))
-            .h(px(34.))
+        let mut bar = div().flex().items_center().gap(px(6.)).min_w(px(SEARCH_MIN)).max_w(px(SEARCH_MAX));
+        if fill {
+            bar = bar.flex_1();
+        } else {
+            bar = bar.w(px(SEARCH_MAX));
+            bar.style().flex_shrink = Some(40.);
+        }
+        bar.h(px(34.))
             .pl(px(10.))
             .pr(px(4.))
             .rounded(px(10.))
@@ -784,7 +846,10 @@ impl RamaApp {
     /// Slim bar at the bottom of every screen: where you are on the left, About on the right.
     fn render_footer(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
         let left = match (&self.repo, &self.phase) {
-            (Some(r), Phase::Ready) => r.root().display().to_string(),
+            (Some(r), Phase::Ready) => match &self.history {
+                Some(h) => format!("{} · {}", r.root().display(), Self::commit_count(h)), // i18n-ok: separator
+                None => r.root().display().to_string(),
+            },
             _ => String::new(),
         };
         let ink = t.ink;
@@ -892,7 +957,7 @@ impl Render for RamaApp {
                 self.render_failed(&t, &path, &message, cx).into_any_element()
             }
             Phase::Ready if self.map_view => {
-                let center = self.render_map(&t, cx);
+                let center = self.render_map(&t, f32::from(window.viewport_size().width), cx);
                 let right = self.render_map_panel(&t, cx);
                 div()
                     .flex()
@@ -960,7 +1025,7 @@ impl Render for RamaApp {
             .bg(t.canvas)
             .text_color(t.ink)
             .font_family(SANS)
-            .child(self.render_topbar(&t, cx))
+            .child(self.render_topbar(&t, f32::from(window.viewport_size().width), cx))
             .child(div().flex_1().min_h_0().child(body))
             .child(self.render_footer(&t, cx))
             .children(self.render_toast(&t))
@@ -968,6 +1033,38 @@ impl Render for RamaApp {
             .children(self.render_modal(&t, cx))
             .children(self.render_cleanup(&t, cx))
             .children(self.render_map_dialog(&t, cx))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bar {
+    /// Labelled buttons on one row.
+    Full,
+    /// Icons and counts only.
+    Compact,
+    /// Search and git buttons on a second row.
+    TwoRows,
+}
+
+/// Rough widths of what the top bar holds (labels in the longest language, French), to decide
+/// before layout how much it can show.
+const BAR_LEFT_MIN: f32 = 30. + 40. + 160. + 64. + 30.;
+const BAR_BUTTONS_FULL: f32 = 130. + 8. + 3. * 95. + 24.;
+const BAR_BUTTONS_COMPACT: f32 = 64. + 8. + 3. * 52. + 24.;
+const BAR_TOOLS_FULL: f32 = 34. + 105. + 34. + 16.;
+const BAR_TOOLS_COMPACT: f32 = 34. + 34. + 34. + 16.;
+const BAR_CHROME: f32 = 24. + 4. * 8.;
+/// Room left for a long branch name before labels go.
+const BAR_SLACK: f32 = 120.;
+
+pub(crate) fn topbar_mode(width: f32) -> Bar {
+    let need = |buttons: f32, tools: f32| BAR_CHROME + BAR_LEFT_MIN + SEARCH_MIN + buttons + tools;
+    if width >= need(BAR_BUTTONS_FULL, BAR_TOOLS_FULL) + BAR_SLACK {
+        Bar::Full
+    } else if width >= need(BAR_BUTTONS_COMPACT, BAR_TOOLS_COMPACT) {
+        Bar::Compact
+    } else {
+        Bar::TwoRows
     }
 }
 
@@ -988,5 +1085,34 @@ fn open_error(e: &repo::Error) -> String {
         i18n::t!("app.error.not_repo")
     } else {
         i18n::t!("app.error.other", detail = s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BAR_BUTTONS_COMPACT, BAR_CHROME, BAR_LEFT_MIN, BAR_TOOLS_COMPACT, Bar, SEARCH_MIN, topbar_mode};
+
+    #[test]
+    fn topbar_fits() {
+        assert_eq!(topbar_mode(1000.), Bar::Compact);
+        assert_eq!(topbar_mode(1280.), Bar::Compact);
+        assert_eq!(topbar_mode(1440.), Bar::Full);
+        assert_eq!(topbar_mode(1920.), Bar::Full);
+        assert_eq!(topbar_mode(800.), Bar::TwoRows);
+        // compact really fits at 1000 px: everything at its minimum plus the search's
+        const { assert!(BAR_CHROME + BAR_LEFT_MIN + SEARCH_MIN + BAR_BUTTONS_COMPACT + BAR_TOOLS_COMPACT <= 1000.) };
+        // the second row holds the search and the compact buttons down to 480 px
+        const { assert!(24. + SEARCH_MIN + 8. + BAR_BUTTONS_COMPACT <= 480.) };
+        let mut last = Bar::TwoRows;
+        for w in (400..2400).step_by(20) {
+            let m = topbar_mode(w as f32);
+            let rank = |b: Bar| match b {
+                Bar::TwoRows => 0,
+                Bar::Compact => 1,
+                Bar::Full => 2,
+            };
+            assert!(rank(m) >= rank(last), "wider never shows less ({w} px)");
+            last = m;
+        }
     }
 }

@@ -58,6 +58,7 @@ impl RamaApp {
         let clean = s.is_clean();
         let counts = if clean { i18n::t!("app.wip.clean") } else { format!("{} · {}", i18n::tn!("app.wip.changes", n), i18n::tn!("app.wip.staged", s.staged.len())) }; // i18n-ok: separator
         let color = if clean { t.border_strong } else { color };
+        let agent = self.agents.current.clone().and_then(|p| self.agent_badge(t, &p, 2., "wip-agent", cx));
         let graph = div()
             .relative()
             .flex_none()
@@ -82,6 +83,7 @@ impl RamaApp {
                 .child(div().flex_none().w(px(refs_w)))
                 .child(graph)
                 .child(div().flex_none().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).when(clean, |d| d.text_color(t.ink_muted)).child(i18n::t!("app.wip.title")))
+                .children(agent)
                 .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(if clean { t.ink_muted } else { t.accent }).child(counts))
                 .when(!clean, |d| d.child(div().flex_none().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.wip.open_hint"))))
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -450,7 +452,8 @@ impl RamaApp {
 
     /// Top bar: Changes (with the changed-file count) and explicit Fetch / Pull / Push with the
     /// current branch's ahead / behind counts; a spinner on the one running.
-    pub(crate) fn render_remote_buttons(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Changes, Fetch, Pull, Push; `compact`: icons and counts only (labels in the tooltips).
+    pub(crate) fn render_remote_buttons(&self, t: &Tokens, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let enabled = !self.busy() && self.repo.is_some();
         let branch = self.work.status.as_ref().map(|s| s.branch.clone()).unwrap_or_default();
         let running = self.work.job.as_ref().map(|j| match j.op {
@@ -464,12 +467,12 @@ impl RamaApp {
             let spinning = running == Some(which);
             ui::outline_button(t, id)
                 .h(px(32.))
-                .px(px(10.))
-                .gap(px(6.))
+                .px(px(if compact { 8. } else { 10. }))
+                .gap(px(if compact { 4. } else { 6. }))
                 .text_size(px(12.5))
                 .when(spinning, |d| d.child(Spinner::new().small().color(t.accent)))
                 .when(!spinning, |d| d.child(icon(ic, 14., if enabled { t.ink } else { t.ink_muted })))
-                .child(label)
+                .when(!compact, |d| d.child(label))
                 .children(count.map(|c| div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(t.accent).child(c)))
                 .when(!enabled, |d| d.opacity(0.55).cursor_default())
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
@@ -478,12 +481,12 @@ impl RamaApp {
         let wip_on = self.work.wip;
         let changes = ui::outline_button(t, "changes")
             .h(px(32.))
-            .px(px(10.))
-            .gap(px(6.))
+            .px(px(if compact { 8. } else { 10. }))
+            .gap(px(if compact { 4. } else { 6. }))
             .text_size(px(12.5))
             .when(wip_on, |d| d.border_color(t.accent).bg(t.accent_soft))
             .child(icon(IconName::File, 14., t.ink))
-            .child(i18n::t!("app.topbar.changes"))
+            .when(!compact, |d| d.child(i18n::t!("app.topbar.changes")))
             .child(div().min_w(px(18.)).h(px(18.)).px(px(5.)).rounded_full().flex().items_center().justify_center().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).when(n > 0, |d| d.bg(t.accent).text_color(t.on_fill())).when(n == 0, |d| d.bg(t.canvas).text_color(t.ink_muted)).child(crate::util::group(n)))
             .tooltip(|window, cx| Tooltip::new(i18n::t!("app.topbar.changes_tip")).build(window, cx))
             .on_click(cx.listener(|this, _, window, cx| {

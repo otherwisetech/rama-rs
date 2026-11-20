@@ -1,17 +1,22 @@
 // No console window behind the app on Windows release builds.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
+mod agents;
+mod agents_view;
 mod app;
 mod cleanup;
+mod convo_view;
 mod detail;
 mod diff_view;
 mod graph_view;
 mod launch;
 mod map;
 mod map_view;
+mod robot;
 mod settings;
 mod sidebar;
 mod theme;
+mod transcript;
 mod ui;
 mod util;
 mod work;
