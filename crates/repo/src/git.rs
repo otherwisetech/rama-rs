@@ -92,6 +92,25 @@ pub(crate) fn output(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
     }
 }
 
+/// [`output`] with `input` on stdin (written from another thread, so large inputs can't
+/// deadlock against a full stdout pipe).
+pub(crate) fn output_with_stdin(dir: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
+    let mut child = command(dir).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(spawn_error)?;
+    let mut w = child.stdin.take().expect("piped stdin");
+    let data = input.to_vec();
+    let writer = std::thread::spawn(move || {
+        use std::io::Write;
+        let _ = w.write_all(&data);
+    });
+    let out = child.wait_with_output()?;
+    let _ = writer.join();
+    if out.status.success() {
+        Ok(out.stdout)
+    } else {
+        Err(Box::new(GitError::Failed(String::from_utf8_lossy(&out.stderr).into_owned())))
+    }
+}
+
 static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Grace period between asking a cancelled hook to stop (SIGINT, as Ctrl+C would) and killing it;
@@ -101,7 +120,9 @@ const KILL_AFTER: Duration = Duration::from_secs(3);
 /// Run git off the UI thread, streaming each output line to `on_line(text, replaces_previous)`;
 /// `replaces_previous` is set for `\r` progress updates. `cancel` stops the whole process group.
 pub fn run(dir: &Path, args: &[&str], stdin: Option<&[u8]>, cancel: &Cancel, on_line: &mut dyn FnMut(&str, bool)) -> Result<Run> {
-    debug_assert!(!args.iter().any(|a| a.starts_with("--force") || *a == "-f"), "rama never forces"); // i18n-ok
+    // the one forced write: removing a dirty worktree, after its own second confirmation
+    let worktree_remove = args.starts_with(&["worktree", "remove"]);
+    debug_assert!(worktree_remove || !args.iter().any(|a| a.starts_with("--force") || *a == "-f"), "rama never forces"); // i18n-ok
     let trace = std::env::temp_dir().join(format!("rama-trace2-{}-{}.json", std::process::id(), TRACE_SEQ.fetch_add(1, Ordering::Relaxed)));
     let mut cmd = command(dir);
     cmd.args(args).env("GIT_TRACE2_EVENT", &trace).stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());

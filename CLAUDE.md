@@ -7,9 +7,12 @@ Same conventions as genealogy-rs and diskmap.
 ```
 crates/graph  rama-graph: topo_order + layout → Rows (lane, colour, up/down edges). Pure, no git.
 crates/repo   rama-repo: Repo::discover / history / changes / diff over gitoxide; status, stage,
-              commit, stash, branches, fetch/pull/push via the git CLI (work.rs, git.rs). No UI.
+              commit, stash, branches, fetch/pull/push via the git CLI (work.rs, git.rs);
+              worktrees, base branches, disk usage (worktree.rs); merged / gone / squash
+              detection for cleanup (cleanup.rs). No UI.
 crates/i18n   rama-i18n: embedded translation catalogs, t!/tn!/tv! macros, i18n guard tests
-crates/app    `rama` desktop app (GPUI + gpui-component)
+crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: worktree map;
+              cleanup.rs: branch cleanup dialog; launch.rs: external terminals and agent CLIs
 ```
 
 ## Rules
@@ -18,9 +21,14 @@ crates/app    `rama` desktop app (GPUI + gpui-component)
   (refreshes use `git --no-optional-locks status` and gitoxide reads). Destructive actions
   (discard, drop stash, delete branch, delete remote branch, `--no-verify`) go through a
   confirmation modal; untracked files are moved to the Trash, never deleted. Nothing is ever
-  force-pushed (`--force`, `--force-with-lease`, `reset --hard` are off limits). The one forced
-  local write is `git branch -D` for an unmerged branch, only after a second, separate confirm;
-  deleting a remote branch makes the user type its name.
+  force-pushed (`--force`, `--force-with-lease`, `reset --hard` are off limits). Forced local
+  writes happen only after a second, separate confirm: `git branch -D` for an unmerged branch
+  (also squash-merged / gone branches in cleanup) and `git worktree remove --force` for a worktree
+  with changes (listed in the dialog; `git::run` allows `--force` only there). Locked worktrees
+  are never removed. Deleting a remote branch makes the user type its name (bulk cleanup: the
+  number of branches). `git gc --prune=now` asks first. Background reads include
+  `git worktree list`, `for-each-ref`, `status --no-optional-locks` per worktree, `log -p | patch-id`
+  for squash detection and a file walk for sizes; nothing there writes.
 - **Writes go through the `git` CLI** (`crates/repo/src/git.rs`), never gitoxide, so hooks,
   `core.hooksPath`, signing, LFS and credential helpers behave as in a terminal. Every git
   subprocess gets the login-shell environment from `shell_env` (GUI apps lack the shell PATH).
@@ -31,7 +39,11 @@ crates/app    `rama` desktop app (GPUI + gpui-component)
   same change. Untranslatable literals end their line with `// i18n-ok`.
 - Every graph/repo change ships with a test (`crates/graph/src/lib.rs`, `crates/repo/tests/`).
   Repo tests build fixtures with the `git` CLI; `tests/work.rs` isolates global/system git config
-  (`GIT_CONFIG_GLOBAL`, `commit.gpgsign=false`) and never touches the real Trash.
+  (`GIT_CONFIG_GLOBAL`, `commit.gpgsign=false`) and never touches the real Trash; `tests/worktrees.rs`
+  does the same for worktrees and cleanup. `examples/worktrees.rs` times the map and cleanup scans
+  read-only (safe on a real repository).
+- External terminals get the exact command line shown before its first run (remembered per
+  terminal + command in settings); commands run through the login shell (`$SHELL -lc`).
 - Comments: sparse, only non-obvious why.
 - GPUI pins: `Cargo.lock` pins the same zed / gpui-component revs as genealogy-rs. Building only
   `rama-repo` can prune them from the lock; restore it before building the app.

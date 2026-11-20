@@ -7,8 +7,9 @@ use crate::ui::icon;
 use crate::work::{Op, PromptKind};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
-use gpui_component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
+use gpui_component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{IconName, Sizable as _};
 use repo::{History, RefKind, Stash};
@@ -161,9 +162,8 @@ impl RamaApp {
             .tooltip(move |window, cx| Tooltip::new(sort_tip.clone()).build(window, cx))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.side_recent = !this.side_recent;
-                let mut s = crate::settings::Settings::load();
-                s.branch_sort = Some(if this.side_recent { "recent" } else { "name" }.to_string()); // i18n-ok: setting value
-                s.save();
+                let recent = this.side_recent;
+                crate::settings::Settings::update(|s| s.branch_sort = Some(if recent { "recent" } else { "name" }.to_string())); // i18n-ok: setting value
                 cx.notify();
             }));
         let clear = filtering.then(|| {
@@ -216,6 +216,24 @@ impl RamaApp {
             )
     }
 
+    /// "⋯" on the local branches header: cleanup and worktrees.
+    fn local_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let weak = cx.entity().downgrade();
+        let busy = self.work.job.is_some();
+        div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(Button::new("local-menu").ghost().xsmall().icon(IconName::Ellipsis).dropdown_menu(move |menu, _, _| {
+            let (w1, w2, w3) = (weak.clone(), weak.clone(), weak.clone());
+            menu.item(PopupMenuItem::new(i18n::t!("app.clean.menu")).disabled(busy).on_click(move |_, window, cx| {
+                w1.update(cx, |this, cx| this.open_cleanup(window, cx)).ok();
+            }))
+            .item(PopupMenuItem::new(i18n::t!("app.map.new")).disabled(busy).on_click(move |_, window, cx| {
+                w2.update(cx, |this, cx| this.open_new_worktree(None, window, cx)).ok();
+            }))
+            .item(PopupMenuItem::new(i18n::t!("app.map.show")).on_click(move |_, _, cx| {
+                w3.update(cx, |this, cx| this.show_map(true, cx)).ok();
+            }))
+        }))
+    }
+
     fn side_item(&self, t: &Tokens, ix: usize, item: Item, sections: &Rc<Vec<SecData>>, filtering: bool, cx: &mut Context<Self>) -> AnyElement {
         let hover = if t.dark { t.border } else { t.canvas };
         match item {
@@ -240,6 +258,7 @@ impl RamaApp {
                     .child(icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 12., t.ink_muted))
                     .child(div().flex_1().child(section_name(sec)))
                     .child(div().text_size(px(11.)).when(filtering, |d| d.text_color(t.accent)).child(n))
+                    .when(sec == Sec::Local, |d| d.child(self.local_menu(cx)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let set = if filtering { &mut this.filter_collapsed } else { &mut this.collapsed };
                         if !set.remove(&sec) {
@@ -384,6 +403,8 @@ impl RefMenu {
                 menu = menu.item(self.item(push, !busy, move |this, _, cx| this.push_branch(n.clone(), head, cx)));
                 menu = menu.separator();
                 menu = menu.item(self.item(i18n::t!("app.menu.new_branch"), !busy, move |this, window, cx| this.open_prompt(PromptKind::NewBranch(target), window, cx)));
+                let n = name.clone();
+                menu = menu.item(self.item(i18n::t!("app.map.new_from_branch"), !busy && !head, move |this, window, cx| this.open_new_worktree(Some(n.clone()), window, cx)));
                 let n = name.clone();
                 menu = menu.item(self.item(i18n::t!("app.menu.rename"), !busy, move |this, window, cx| this.open_prompt(PromptKind::RenameBranch(n.clone()), window, cx)));
                 menu = menu.item(self.copy_item());

@@ -143,3 +143,26 @@ pub fn merge(current: &HashMap<String, String>, shell: Option<&HashMap<String, S
 pub fn use_inherited() {
     let _ = RESOLVED.set(merge(&std::env::vars().collect(), None));
 }
+
+/// The first executable called `name` in `path` (a PATH value), like `which`.
+pub fn find_in(path: &str, name: &str) -> Option<std::path::PathBuf> {
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ".bat", ""] } else { &[""] };
+    path.split(sep).filter(|d| !d.is_empty()).flat_map(|d| exts.iter().map(move |e| std::path::Path::new(d).join(format!("{name}{e}")))).find(|p| is_executable(p))
+}
+
+/// [`find_in`] on the resolved login-shell PATH.
+pub fn which(name: &str) -> Option<std::path::PathBuf> {
+    find_in(path()?, name)
+}
+
+#[cfg(unix)]
+fn is_executable(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(p: &std::path::Path) -> bool {
+    p.is_file()
+}

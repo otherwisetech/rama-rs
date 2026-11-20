@@ -44,6 +44,25 @@ pub enum Op {
     Pull,
     /// `git push …` with the arguments the user saw (upstream included).
     Push(Vec<String>),
+    /// A worktree, gc or fetch-and-prune command with the arguments shown to the user.
+    Git { args: Vec<String>, kind: GitKind },
+    /// `git worktree remove [--force]`, then `git branch -d` of its branch if asked.
+    RemoveWorktree { path: PathBuf, force: bool, branch: Option<String> },
+    /// `git branch <name> <sha>` from the cleanup undo log.
+    RestoreBranch { name: String, oid: Oid },
+    /// The branches (and worktrees) chosen in the cleanup dialog.
+    Cleanup(Arc<crate::cleanup::Plan>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitKind {
+    /// With the folder and agent command to start in a terminal once it exists.
+    WorktreeAdd { launch: Option<(PathBuf, String)> },
+    Lock,
+    Unlock,
+    Prune,
+    Gc,
+    FetchPrune,
 }
 
 impl Op {
@@ -70,12 +89,16 @@ impl Op {
             Op::PullFf { name, .. } => format!("git pull --ff-only ({name})"), // i18n-ok
             Op::Fetch => "git fetch --all".into(),                          // i18n-ok
             Op::Pull => "git pull".into(),                                  // i18n-ok
+            Op::Git { args, .. } => format!("git {}", args.join(" ")),      // i18n-ok
+            Op::RemoveWorktree { path, force, .. } => format!("git worktree remove{} {}", if *force { " --force" } else { "" }, path.display()), // i18n-ok
+            Op::RestoreBranch { name, oid } => format!("git branch {name} {}", oid.to_hex_with_len(10)), // i18n-ok
+            Op::Cleanup(p) => format!("git branch -d/-D ({})", p.items.len()), // i18n-ok
         }
     }
 
     /// Network and hook-running ops stream their output while they run.
     fn streams(&self) -> bool {
-        matches!(self, Op::Commit { .. } | Op::Fetch | Op::Pull | Op::PullFf { .. } | Op::Push(_) | Op::DeleteRemote(_))
+        matches!(self, Op::Commit { .. } | Op::Fetch | Op::Pull | Op::PullFf { .. } | Op::Push(_) | Op::DeleteRemote(_) | Op::Git { .. } | Op::RemoveWorktree { .. } | Op::Cleanup(_))
     }
 
     /// Ops that leave history and refs alone only need a status refresh.
@@ -201,7 +224,7 @@ impl Work {
     }
 }
 
-fn push_log(log: &Mutex<Vec<String>>, line: &str, replace: bool) {
+pub(crate) fn push_log(log: &Mutex<Vec<String>>, line: &str, replace: bool) {
     let mut l = log.lock().unwrap();
     if replace && !l.is_empty() {
         *l.last_mut().unwrap() = line.to_string();
@@ -246,6 +269,19 @@ fn execute(repo: &Repo, op: &Op, cancel: &Cancel, log: &Arc<Mutex<Vec<String>>>)
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             repo.run(&args, cancel, &mut sink)
         }
+        Op::Git { args, .. } => repo.run_args(args, cancel, &mut sink),
+        Op::RemoveWorktree { path, force, branch } => {
+            let run = repo.run_args(&Repo::worktree_remove_args(path, *force), cancel, &mut sink)?;
+            match branch {
+                Some(b) if run.success => {
+                    push_log(log, &format!("$ git branch -d {b}"), false); // i18n-ok: command line
+                    repo.run(&["branch", "-d", "--", b], cancel, &mut sink)
+                }
+                _ => Ok(run),
+            }
+        }
+        Op::RestoreBranch { name, oid } => repo.restore_branch(name, *oid),
+        Op::Cleanup(plan) => crate::cleanup::execute(repo, plan, cancel, log, &mut sink),
     }
 }
 
@@ -494,6 +530,7 @@ impl RamaApp {
             }, cx);
         }
         self.refresh(op.touches_history(), cx);
+        self.after_op(&op, ok, cx);
         cx.notify();
     }
 

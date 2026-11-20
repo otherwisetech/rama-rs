@@ -46,10 +46,46 @@ Linux. UI in Spanish, English, Portuguese and French.
   counts and a spinner while they run. Push becomes *Publish* for a branch without an upstream
   and shows the `--set-upstream` command before running it. Nothing is ever force-pushed; a
   failure shows git's and the hook's output above the graph.
+- **Worktree map** (*Map*, ⌘M, next to the graph): the main worktree in the centre and every
+  worktree linked to it, radially or grouped by the base branch each is closest to. Each card shows
+  its path, branch (or detached SHA), ahead / behind against its upstream and the default branch,
+  uncommitted changes, last commit, size on disk with a `node_modules` (or `.git`, `target`…)
+  breakdown, and flags: this window, locked, prunable (folder gone), merged, upstream gone. Merged
+  ones are dimmed; edges use the branch's lane colour. Drag or scroll to pan; ⌘+scroll, pinch or
+  ⌘+/− to zoom (⌘0 resets). A list mode sorts by path, size, age or merged for many worktrees.
+  Sizes are measured in the background one worktree at a time (nested worktrees count only on
+  their own card, hard links once) and cached.
+- Worktree actions (side panel and right-click): open in the file manager, open in a new rama
+  window, copy the path, open your terminal there, **start an AI agent there** (`claude`,
+  `codex`, `opencode`, `pi`, `gemini`, `aider` when found on your login-shell PATH, or your own
+  command list), lock / unlock, and remove (asks first; a worktree with changes or untracked files
+  lists them and needs a second *Force remove*; optionally also `git branch -d` its merged branch).
+  *Prune…* previews `git worktree prune` before running it. *New worktree…* checks out an existing
+  branch, a new branch or a commit into `../<repo>-<branch>` (or a folder you choose) and can start
+  an agent once it exists.
+- Terminals: Terminal.app, iTerm2, Ghostty, Warp, WezTerm, kitty and Alacritty on macOS;
+  `$TERMINAL`, GNOME Terminal, Konsole, kitty, Alacritty and WezTerm on Linux; Windows Terminal,
+  PowerShell and cmd on Windows. The exact command line is shown the first time each terminal +
+  command pair is used. Warp can't be handed a command, so it opens at the folder and the command is
+  copied for you to paste. There is no embedded terminal.
+- **Clean up branches…** (Local branches header ⋯ menu, or the map): lists local branches merged
+  into the default branch (`origin/HEAD`, else main / master / dev / develop, or the one you set),
+  with their upstream gone, or squash- / rebase-merged (every patch, or the branch's whole diff, is
+  already on the default branch by `git patch-id`; "maybe" when only the touched files match, left
+  unchecked). Never listed: the checked-out branch, the default branch and protected patterns
+  (`main`, `master`, `dev`, `develop`, `release*`, `trunk` by default). Branches checked out in a
+  worktree are only deleted if you also tick *remove the worktree* (and it has no changes).
+  `git branch -d` where it works; the rest need `-D` behind a second confirmation; deleting their
+  remote branches is a separate, default-off option that shows the `git push --delete` commands and
+  asks you to type the count. *Fetch & prune first* refreshes what is gone. Deleted branches can be
+  restored for the rest of the session (`git branch <name> <sha>`).
+- Disk space, honestly: deleting branches frees almost nothing; the space is in worktrees (sizes
+  on the map) and unreachable objects. *Run git gc* shows `.git` before and after;
+  `--prune=now` asks first.
 - *Git output* panel with the running command, live output from git and its hooks, and Cancel.
 - Refreshes on its own when files change on disk or the window regains focus.
 - Keyboard: ↑/↓ or j/k to move, ⌘F to search, Esc to close a diff or clear the search, ⌘C copies the commit SHA, ⌘O opens a repo,
-  ⌘R reloads.
+  ⌘R reloads, ⌘M switches between the graph and the worktree map.
 - Writes only when you ask: every change to a repository is an explicit action, the destructive
   ones ask for confirmation, and nothing is ever force-pushed.
 
@@ -91,6 +127,7 @@ or notarized**. rama makes no network requests of its own; fetch, pull and push 
 ```sh
 cargo run -p rama-app -- path/to/repo        # or no argument for the start screen
 cargo run --release -p rama-repo --example log -- path/to/repo   # load history and time it
+cargo run --release -p rama-repo --example worktrees -- path/to/repo   # time the map and cleanup scans (read-only)
 script/bundle-macos.sh                       # macOS: target/release/rama.app with the icon
 ```
 
