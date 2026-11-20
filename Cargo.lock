@@ -1021,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "cocoa-foundation"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e14045fb83be07b5acf1c0884b2180461635b433455fa35d1cd6f17f1450679d"
 dependencies = [
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "core-graphics-types"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d44a101f213f6c4cdc1853d4b78aef6db6bdfa3468798cc1d9912f4735013eb"
 dependencies = [
@@ -1540,7 +1540,7 @@ dependencies = [
 
 [[package]]
 name = "dispatch"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd0c93bb4b0c6d9b77f4435b0ae98c24d17f1c45b2ff844c6151a07256ca923b"
 
@@ -1957,7 +1957,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "foldhash"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
@@ -3144,7 +3144,7 @@ dependencies = [
 
 [[package]]
 name = "gpu-descriptor-types"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdf242682df893b86f33a73828fb09ca4b2d3bb6cc95249707fc684d27484b91"
 dependencies = [
@@ -4202,7 +4202,7 @@ checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
 
 [[package]]
 name = "is-docker"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "928bae27f42bc99b60d9ac7334e3a21d10ad8f1835a4e12ec3ec0464765ed1b3"
 dependencies = [
@@ -4918,7 +4918,7 @@ dependencies = [
 
 [[package]]
 name = "nohash-hasher"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
@@ -5538,7 +5538,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "option-ext"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
@@ -5553,7 +5553,7 @@ dependencies = [
 
 [[package]]
 name = "ordered-stream"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9aa2b01e1d916879f73a53d01d1d6cee68adbb31d6d9177a8cfce093cced1d50"
 dependencies = [
@@ -5881,7 +5881,7 @@ dependencies = [
 
 [[package]]
 name = "powerfmt"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
@@ -6104,7 +6104,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rama-app"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6124,15 +6124,15 @@ dependencies = [
 
 [[package]]
 name = "rama-graph"
-version = "0.2.1"
+version = "0.2.2"
 
 [[package]]
 name = "rama-i18n"
-version = "0.2.1"
+version = "0.2.2"
 
 [[package]]
 name = "rama-repo"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "gix",
  "libc",
@@ -7598,7 +7598,7 @@ dependencies = [
 
 [[package]]
 name = "tao-core-video-sys"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "271450eb289cb4d8d0720c6ce70c72c8c858c93dd61fc625881616752e6b98f6"
 dependencies = [
@@ -7998,7 +7998,7 @@ dependencies = [
 
 [[package]]
 name = "tracing-log"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
 dependencies = [
@@ -8898,7 +8898,7 @@ dependencies = [
 
 [[package]]
 name = "windows-collections"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3beeceb5e5cfd9eb1d76b381630e82c4241ccd0d27f1a39ed41b2760b255c5e8"
 dependencies = [
@@ -9067,7 +9067,7 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-numerics"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1"
 dependencies = [
@@ -9118,7 +9118,7 @@ dependencies = [
 
 [[package]]
 name = "windows-result"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d1043d8214f791817bab27572aaa8af63732e11bf84aa21a45a78d6c317ae0e"
 dependencies = [
@@ -9797,7 +9797,7 @@ dependencies = [
 
 [[package]]
 name = "zed-sum-tree"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d490156d0d7311855564d6e1d6dccab992405a0c0e15e1c8ef18920c02177e35"
 dependencies = [
