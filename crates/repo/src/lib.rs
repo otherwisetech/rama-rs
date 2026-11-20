@@ -13,7 +13,7 @@ pub mod shell_env;
 mod work;
 
 pub use git::{Cancel, GitError, Run, failed_hook, strip_ansi, version as git_version};
-pub use work::{BranchStatus, FileState, Stash, WorkFile, WorkStatus, parse_stash_list, parse_status, parse_unified};
+pub use work::{BranchStatus, FileState, Stash, WorkFile, WorkStatus, parse_stash_list, parse_status, parse_unified, split_remote_name};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -101,6 +101,46 @@ impl History {
         let id = self.commits[row].id;
         self.refs.iter().filter(move |r| r.target == id)
     }
+}
+
+/// Where `query` matches a ref name, as byte ranges to highlight; ASCII case is ignored.
+/// A plain substring wins; otherwise the query's words (split on `-`, `/`, `_`, `.`, spaces)
+/// must each start a segment of the name, in order: `fe/lo` and `feat login` both match
+/// `feature/user-login`. An empty query matches everything with no highlight.
+pub fn ref_match(query: &str, name: &str) -> Option<Vec<std::ops::Range<usize>>> {
+    let q = query.trim().to_ascii_lowercase();
+    if q.is_empty() {
+        return Some(Vec::new());
+    }
+    let n = name.to_ascii_lowercase();
+    if let Some(at) = n.find(&q) {
+        return Some(vec![std::ops::Range { start: at, end: at + q.len() }]);
+    }
+    let sep = |c: char| matches!(c, '-' | '/' | '_' | '.' | ' ');
+    let words: Vec<&str> = q.split(sep).filter(|w| !w.is_empty()).collect();
+    if words.is_empty() {
+        return None;
+    }
+    let mut starts = Vec::new();
+    let mut prev_sep = true;
+    for (i, c) in n.char_indices() {
+        if prev_sep && !sep(c) {
+            starts.push(i);
+        }
+        prev_sep = sep(c);
+    }
+    let mut out = Vec::with_capacity(words.len());
+    let mut seg = starts.iter();
+    'words: for w in words {
+        for &s in seg.by_ref() {
+            if n[s..].starts_with(w) {
+                out.push(s..s + w.len());
+                continue 'words;
+            }
+        }
+        return None;
+    }
+    Some(out)
 }
 
 /// Lowercase without accents, for matching: "Café Ñandú" → "cafe nandu".

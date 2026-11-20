@@ -1,9 +1,11 @@
-//! Tiny settings file (`settings.json` in the platform config dir). Hand-rolled JSON: one key.
+//! Tiny settings file (`settings.json` in the platform config dir). Hand-rolled JSON: a few string keys.
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
     pub language: Option<String>,
+    /// Local branch order in the sidebar: `"recent"`, else by name.
+    pub branch_sort: Option<String>,
 }
 
 fn dir() -> Option<PathBuf> {
@@ -35,14 +37,16 @@ impl Settings {
     }
 
     fn parse(s: &str) -> Settings {
-        Settings { language: json_string(s, "language") }
+        Settings { language: json_string(s, "language"), branch_sort: json_string(s, "branch_sort") }
     }
 
     fn to_json(&self) -> String {
-        match &self.language {
-            Some(l) => format!("{{\n  \"language\": \"{}\"\n}}\n", l.replace(['"', '\\'], "")),
-            None => "{}\n".into(),
-        }
+        let fields: Vec<String> = [("language", &self.language), ("branch_sort", &self.branch_sort)].iter().filter_map(|(k, v)| v.as_ref().map(|v| format!("  \"{k}\": \"{}\"", v.replace(['"', '\\'], "")))).collect();
+        if fields.is_empty() { "{}\n".into() } else { format!("{{\n{}\n}}\n", fields.join(",\n")) }
+    }
+
+    pub fn side_recent(&self) -> bool {
+        self.branch_sort.as_deref() == Some("recent")
     }
 }
 
@@ -107,8 +111,11 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let s = Settings { language: Some("en".into()) };
+        let s = Settings { language: Some("en".into()), branch_sort: None };
         assert_eq!(Settings::parse(&s.to_json()), s);
+        let s = Settings { language: Some("pt".into()), branch_sort: Some("recent".into()) };
+        assert_eq!(Settings::parse(&s.to_json()), s);
+        assert!(s.side_recent());
         assert_eq!(Settings::parse(&Settings::default().to_json()), Settings::default());
         assert_eq!(Settings::parse("garbage"), Settings::default());
     }

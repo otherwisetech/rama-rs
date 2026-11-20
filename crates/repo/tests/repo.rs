@@ -133,3 +133,19 @@ fn search_by_message_author_ref_and_sha() {
 fn fold_ignores_case_and_accents() {
     assert_eq!(repo::fold("Café Ñandú ÉXITO"), "cafe nandu exito");
 }
+
+#[test]
+#[allow(clippy::single_range_in_vec_init)] // one highlighted range, not a range of numbers
+fn ref_name_filter() {
+    use repo::ref_match;
+    assert_eq!(ref_match("", "main"), Some(vec![]));
+    assert_eq!(ref_match("LOG", "feature/user-login"), Some(vec![13..16]));
+    assert_eq!(ref_match("fe/lo", "feature/user-login"), Some(vec![0..2, 13..15]));
+    assert_eq!(ref_match("feat login", "feature/user-login"), Some(vec![0..4, 13..18]));
+    assert_eq!(ref_match("f-u-l", "fix/user-login"), Some(vec![0..1, 4..5, 9..10]));
+    // words must start segments, in order
+    assert_eq!(ref_match("lo fe", "feature/login"), None);
+    assert_eq!(ref_match("ea/og", "feature/login"), None);
+    assert_eq!(ref_match("xyz", "main"), None);
+    assert_eq!(ref_match("origin/rel", "origin/release/2.0"), Some(vec![0..10]));
+}

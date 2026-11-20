@@ -406,7 +406,7 @@ fn branches_checkout_create_delete() {
     assert!(r.commit("on topic", false, false, &Cancel::default(), &mut |_, _| {}).unwrap().success);
     r.create_branch("other", base_id, true).unwrap();
     assert_eq!(r.status().unwrap().branch.head.as_deref(), Some("other"));
-    // unmerged: `git branch -d` refuses, and rama never uses -D
+    // unmerged: `git branch -d` refuses (-D needs its own, second confirmation in the app)
     let err = r.delete_branch("topic").unwrap_err();
     assert!(err.to_string().contains("not fully merged"), "{err}");
     r.switch("main").unwrap();
@@ -484,4 +484,87 @@ fn login_shell_env_parsing_and_merge() {
     assert!(!merged.contains_key("HOME"));
     let alone: HashMap<String, String> = shell_env::merge(&current, None).into_iter().collect();
     assert!(alone["PATH"].starts_with("/usr/bin:/bin"));
+}
+
+#[test]
+fn rename_and_force_delete_unmerged_branch() {
+    let d = base();
+    let p = d.path();
+    let r = open(&d);
+    git(p, &["checkout", "-q", "-b", "topic"]);
+    write(p, "t.txt", "topic\n");
+    git(p, &["add", "t.txt"]);
+    git(p, &["commit", "-qm", "topic"]);
+    git(p, &["checkout", "-q", "main"]);
+    git(p, &["branch", "merged"]);
+    assert!(r.branch_merged("merged"));
+    assert!(!r.branch_merged("topic"));
+    r.rename_branch("topic", "topic-2").unwrap();
+    assert!(r.rename_branch("topic-2", "merged").is_err(), "never overwrites with -M");
+    assert!(r.delete_branch("topic-2").is_err());
+    r.delete_branch_force("topic-2").unwrap();
+    let names: Vec<String> = r.history(10).unwrap().refs.iter().map(|x| x.name.clone()).collect();
+    assert_eq!(names, ["main", "merged"]);
+}
+
+#[test]
+fn branch_push_pull_and_delete_remote_against_a_bare_remote() {
+    let d = base();
+    let p = d.path();
+    let r = open(&d);
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(p, &["remote", "add", "origin", remote.path().to_str().unwrap()]);
+    let run = |args: Vec<String>| {
+        let a: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = r.run(&a, &Cancel::default(), &mut |_, _| {}).unwrap();
+        assert!(out.success, "{a:?}: {}", out.output);
+    };
+    run(r.push_branch_args("main", true).unwrap());
+
+    // a branch that is not checked out: first push sets its upstream, the next goes to it
+    git(p, &["branch", "feature/x"]);
+    assert_eq!(r.push_branch_args("feature/x", false).unwrap(), ["push", "--progress", "--set-upstream", "origin", "feature/x"]);
+    run(r.push_branch_args("feature/x", false).unwrap());
+    assert_eq!(r.upstreams().unwrap().get("feature/x").map(String::as_str), Some("origin/feature/x"));
+    assert_eq!(r.push_branch_args("feature/x", false).unwrap(), ["push", "--progress", "origin", "refs/heads/feature/x:refs/heads/feature/x"]);
+    assert_eq!(r.push_branch_args("main", true).unwrap(), ["push", "--progress"]);
+
+    // someone else moves feature/x; fast-forward it without checking it out
+    let other = tempfile::tempdir().unwrap();
+    git(other.path(), &["clone", "-q", "-b", "feature/x", remote.path().to_str().unwrap(), "."]);
+    write(other.path(), "x.txt", "x\n");
+    git(other.path(), &["add", "x.txt"]);
+    git(other.path(), &["commit", "-qm", "x"]);
+    git(other.path(), &["push", "-q"]);
+    let theirs = head(other.path());
+    run(r.pull_ff_args("feature/x", false).unwrap());
+    assert_eq!(git(p, &["rev-parse", "feature/x"]).trim(), theirs);
+    assert_eq!(r.pull_ff_args("main", true).unwrap(), ["pull", "--ff-only", "--progress"]);
+    assert!(r.pull_ff_args("no-upstream", false).is_err());
+
+    // diverged: the fast-forward-only fetch refuses
+    git(p, &["checkout", "-q", "feature/x"]);
+    write(p, "y.txt", "mine\n");
+    git(p, &["add", "y.txt"]);
+    git(p, &["commit", "-qm", "mine"]);
+    git(p, &["checkout", "-q", "main"]);
+    write(other.path(), "z.txt", "theirs\n");
+    git(other.path(), &["add", "z.txt"]);
+    git(other.path(), &["commit", "-qm", "theirs"]);
+    git(other.path(), &["push", "-q"]);
+    let args = r.pull_ff_args("feature/x", false).unwrap();
+    let a: Vec<&str> = args.iter().map(String::as_str).collect();
+    assert!(!r.run(&a, &Cancel::default(), &mut |_, _| {}).unwrap().success);
+
+    // delete the remote branch
+    git(p, &["remote", "add", "origin/mirror", remote.path().to_str().unwrap()]);
+    assert_eq!(r.split_remote("origin/mirror/feature/x").unwrap(), ("origin/mirror".to_string(), "feature/x".to_string()));
+    assert!(r.split_remote("upstream/main").is_err());
+    let args = r.delete_remote_args("origin/feature/x").unwrap();
+    assert_eq!(args, ["push", "origin", "--delete", "feature/x"]);
+    run(args);
+    let left = git(remote.path(), &["branch", "--list"]);
+    assert!(!left.contains("feature/x"), "{left}");
+    assert!(left.contains("main"));
 }

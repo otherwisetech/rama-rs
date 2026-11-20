@@ -16,9 +16,11 @@ crates/app    `rama` desktop app (GPUI + gpui-component)
 
 - **Writes only on explicit user actions.** Nothing writes to a repository in the background
   (refreshes use `git --no-optional-locks status` and gitoxide reads). Destructive actions
-  (discard, drop stash, delete branch, `--no-verify`) go through a confirmation modal; untracked
-  files are moved to the Trash, never deleted. Nothing is ever force-pushed (`--force`,
-  `--force-with-lease`, `-D`, `reset --hard` are off limits).
+  (discard, drop stash, delete branch, delete remote branch, `--no-verify`) go through a
+  confirmation modal; untracked files are moved to the Trash, never deleted. Nothing is ever
+  force-pushed (`--force`, `--force-with-lease`, `reset --hard` are off limits). The one forced
+  local write is `git branch -D` for an unmerged branch, only after a second, separate confirm;
+  deleting a remote branch makes the user type its name.
 - **Writes go through the `git` CLI** (`crates/repo/src/git.rs`), never gitoxide, so hooks,
   `core.hooksPath`, signing, LFS and credential helpers behave as in a terminal. Every git
   subprocess gets the login-shell environment from `shell_env` (GUI apps lack the shell PATH).
