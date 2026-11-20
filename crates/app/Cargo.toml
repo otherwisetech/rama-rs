@@ -18,6 +18,8 @@ graph.workspace = true
 anyhow.workspace = true
 notify = "7"
 serde_json = "1"
+# GitHub star count (one GET a day)
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 # already in Cargo.lock through gpui; only process listing is used
 sysinfo = { version = "0.31", default-features = false, features = ["system"] }
 gpui.workspace = true

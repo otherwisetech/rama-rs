@@ -29,6 +29,8 @@ pub struct Settings {
     pub reduce_motion: Option<String>,
     /// `"on"`: a system notification when an agent starts needing you.
     pub agent_notify: Option<String>,
+    /// `"off"`: don't fetch the repo's star count from api.github.com.
+    pub github_stars: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,11 +103,12 @@ impl Settings {
             agent_badges: st("agent_badges"),
             reduce_motion: st("reduce_motion"),
             agent_notify: st("agent_notify"),
+            github_stars: st("github_stars"),
         }
     }
 
     fn to_json(&self) -> String {
-        let strings = [("language", &self.language), ("branch_sort", &self.branch_sort), ("default_branch", &self.default_branch), ("worktree_base", &self.worktree_base), ("terminal", &self.terminal), ("map_mode", &self.map_mode), ("map_layout", &self.map_layout), ("agent_badges", &self.agent_badges), ("reduce_motion", &self.reduce_motion), ("agent_notify", &self.agent_notify)];
+        let strings = [("language", &self.language), ("branch_sort", &self.branch_sort), ("default_branch", &self.default_branch), ("worktree_base", &self.worktree_base), ("terminal", &self.terminal), ("map_mode", &self.map_mode), ("map_layout", &self.map_layout), ("agent_badges", &self.agent_badges), ("reduce_motion", &self.reduce_motion), ("agent_notify", &self.agent_notify), ("github_stars", &self.github_stars)];
         let lists = [("protected", &self.protected), ("agents", &self.agents), ("launch_ok", &self.launch_ok)];
         let mut fields: Vec<String> = strings.iter().filter_map(|(k, v)| v.as_ref().map(|v| format!("  \"{k}\": {}", quote(v)))).collect();
         fields.extend(lists.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| format!("  \"{k}\": [{}]", v.iter().map(|x| quote(x)).collect::<Vec<_>>().join(", "))));
@@ -126,6 +129,10 @@ impl Settings {
 
     pub fn agent_notify(&self) -> bool {
         self.agent_notify.as_deref() == Some("on")
+    }
+
+    pub fn github_stars(&self) -> bool {
+        self.github_stars.as_deref() != Some("off")
     }
 
     pub fn protected_patterns(&self) -> Vec<String> {
@@ -304,8 +311,10 @@ mod tests {
             agent_badges: Some("off".into()),
             reduce_motion: Some("on".into()),
             agent_notify: Some("on".into()),
+            github_stars: Some("off".into()),
         };
         assert_eq!(Settings::parse(&s.to_json()), s);
+        assert!(!s.github_stars() && Settings::default().github_stars());
         assert!(s.side_recent());
         assert!(!s.agent_badges() && s.reduce_motion());
         assert!(Settings::default().agent_badges() && !Settings::default().reduce_motion());

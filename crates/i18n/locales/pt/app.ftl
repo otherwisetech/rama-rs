@@ -53,6 +53,11 @@ app.about.place = Wyoming, EUA
 app.about.visit = Visitar otherwisetech.com
 app.about.source = Código-fonte no GitHub
 app.about.license = Código aberto · MIT ou Apache-2.0
+app.star.label = Dar uma estrela no GitHub
+app.star.tooltip = Gostou? Dê uma estrela
+app.star.ask = Se este app ajuda você, uma estrela ajuda outras pessoas a encontrá-lo.
+app.star.setting = Mostrar estrelas do GitHub
+app.star.setting_hint = Consulta api.github.com uma vez por dia. Nada sobre você ou seus repositórios é enviado.
 # cópia de trabalho, stash, operações git
 app.side.stashes = STASHES
 app.wip.title = Cópia de trabalho

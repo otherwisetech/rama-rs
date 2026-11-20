@@ -147,7 +147,10 @@ Ready-made builds for macOS (Apple silicon and Intel), Linux and Windows are att
 - **Windows:** unzip and run `rama.exe` (SmartScreen may ask to confirm, since it is unsigned).
 
 The downloads are built by GitHub Actions from the tagged source, but they are **not code-signed
-or notarized**. rama makes no network requests of its own; fetch, pull and push run `git`.
+or notarized**. Fetch, pull and push run `git`; the only request rama makes itself is reading the
+project's star count (`api.github.com/repos/otherwisetech/rama-rs`, no login, nothing about you or
+your repositories) at most once a day, shown next to *Star on GitHub*. Turn it off in the globe
+menu (*Show GitHub star count*).
 
 ## Build and run
 

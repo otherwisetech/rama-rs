@@ -53,6 +53,11 @@ app.about.place = Wyoming, USA
 app.about.visit = Visit otherwisetech.com
 app.about.source = Source code on GitHub
 app.about.license = Open source · MIT or Apache-2.0
+app.star.label = Star on GitHub
+app.star.tooltip = Like it? Give it a star
+app.star.ask = If this app helps you, a star helps others find it.
+app.star.setting = Show GitHub star count
+app.star.setting_hint = Asks api.github.com once a day. Nothing about you or your repositories is sent.
 # working copy, stash, git operations
 app.side.stashes = STASHES
 app.wip.title = Working copy
