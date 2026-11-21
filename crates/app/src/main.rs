@@ -16,6 +16,8 @@ mod otherwise;
 mod robot;
 mod settings;
 mod star;
+mod storage;
+mod vcity;
 mod sidebar;
 mod theme;
 mod transcript;
@@ -30,7 +32,7 @@ use gpui_component_assets::Assets;
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-actions!(rama, [Quit, OpenWebsite]);
+actions!(rama, [Quit, OpenWebsite, OpenVcity, RevealData]);
 
 pub(crate) const APP_NAME: &str = "rama"; // i18n-ok: product name
 pub(crate) const COMPANY: &str = "Otherwise Technologies LLC"; // i18n-ok: company name
@@ -44,9 +46,12 @@ pub(crate) fn set_app_menus(cx: &mut App) {
         MenuItem::action(i18n::t!("app.about.menu", app = APP_NAME), app::ShowAbout),
         MenuItem::action(i18n::t!("app.credit.menu", company = COMPANY), OpenWebsite),
         MenuItem::separator(),
+        MenuItem::action(i18n::t!("app.menu.reveal_data"), RevealData),
+        MenuItem::separator(),
         MenuItem::action(i18n::t!("app.menu.quit"), Quit),
     ];
-    cx.set_menus(vec![Menu { name: APP_NAME.into(), items, disabled: false }]);
+    let help = vec![MenuItem::action(vcity::menu_label(), OpenVcity)];
+    cx.set_menus(vec![Menu { name: APP_NAME.into(), items, disabled: false }, Menu { name: i18n::t!("app.menu.help").into(), items: help, disabled: false }]);
 }
 
 /// gpui-component's icon set plus our own `icons/*.svg`.
@@ -96,6 +101,7 @@ const FONTS: [&[u8]; 3] = [
 ];
 
 fn main() {
+    storage::migrate_on_startup();
     i18n::set_locale(settings::initial_language(&settings::Settings::load()));
     let arg = std::env::args().nth(1);
     if matches!(arg.as_deref(), Some("-h" | "--help")) {
@@ -127,6 +133,8 @@ fn main() {
         cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &OpenWebsite, cx| cx.open_url(COMPANY_URL));
+        cx.on_action(|_: &OpenVcity, cx| vcity::open(cx));
+        cx.on_action(|_: &RevealData, cx| storage::reveal_data_dir(cx));
         gpui_component::set_locale(i18n::locale());
         set_app_menus(cx);
         // "Open in rama" opens more windows; quit when the last one closes

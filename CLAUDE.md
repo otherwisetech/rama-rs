@@ -18,7 +18,8 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
               poll, animation, badge, panel rows, legend; robot.rs: the pixel sprites;
               transcript.rs: session log → conversation items; convo_view.rs: Conversation tab;
               otherwise.rs: otherwise-link (links in, About's other apps, Today feed of agents
-              that need you)
+              that need you); storage.rs: `<data root>/rama/` + one-time migration from the
+              old config folder; vcity.rs: Vcity invitation (About, Help)
 ```
 
 ## Rules

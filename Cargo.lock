@@ -5601,8 +5601,8 @@ dependencies = [
 
 [[package]]
 name = "otherwise-link"
-version = "0.1.0"
-source = "git+https://github.com/otherwisetech/otherwise-link?tag=v0.1.0#0b2969806dcac2adc79c9f21f6bd72a98d8e0be2"
+version = "0.2.0"
+source = "git+https://github.com/otherwisetech/otherwise-link?tag=v0.2.0#8e4cc8c298e9c5c37a7c02bc061e1c8fbee50b2f"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -6154,7 +6154,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rama-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6178,15 +6178,15 @@ dependencies = [
 
 [[package]]
 name = "rama-graph"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "rama-i18n"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "rama-repo"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "gix",
  "libc",

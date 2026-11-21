@@ -188,3 +188,9 @@ app.prompt.rename_title = Renombrar {name}
 app.prompt.rename_ok = Renombrar
 app.about.more_apps = Más apps de Otherwise en este computador
 app.link.agent_gone = Ese agente ya no está trabajando en este repositorio.
+
+# data folder, Vcity
+app.menu.help = Ayuda
+app.menu.reveal_data = Mostrar la carpeta de ajustes de rama
+app.vcity.menu = Crea tu tienda en Vcity
+app.vcity.pitch = ¿Vendes productos o servicios? Crea la tienda virtual de tu empresa en Vcity: catálogo, pedidos, pagos, reservas, chat con clientes y mucho más.

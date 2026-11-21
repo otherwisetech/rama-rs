@@ -696,9 +696,12 @@ impl RamaApp {
             }));
             menu = menu.label(i18n::t!("app.star.setting_hint"));
             let w = weak.clone();
-            menu.separator().item(PopupMenuItem::new(i18n::t!("app.about.menu", app = crate::APP_NAME)).on_click(move |_, _, cx| {
-                w.update(cx, |this, cx| this.show_about(cx)).ok();
-            }))
+            menu.separator()
+                .item(PopupMenuItem::new(i18n::t!("app.menu.reveal_data")).on_click(|_, _, cx| crate::storage::reveal_data_dir(cx)))
+                .item(PopupMenuItem::new(i18n::t!("app.about.menu", app = crate::APP_NAME)).on_click(move |_, _, cx| {
+                    w.update(cx, |this, cx| this.show_about(cx)).ok();
+                }))
+                .item(PopupMenuItem::new(crate::vcity::menu_label()).on_click(|_, _, cx| crate::vcity::open(cx)))
         });
         let compact = bar != Bar::Full;
         let open_tip = i18n::t!("app.topbar.open");
@@ -1002,6 +1005,7 @@ impl RamaApp {
                     .child(crate::star::about_button(t, cx)),
             )
             .child(crate::star::about_ask(t))
+            .child(crate::vcity::about_block(t))
             .children(self.render_other_apps(t))
             .child(div().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.about.license")));
         div()

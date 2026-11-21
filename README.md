@@ -180,6 +180,20 @@ Otherwise Technologies' apps share. Everything stays on your computer.
   the worktree map's settings.
 - **About** lists the other Otherwise apps installed on this computer; click one to open it.
 
+## Where files live
+
+rama works on your repositories in place and keeps no documents of its own. Its settings, recent
+repositories and small caches (folder sizes, star count) are in the Otherwise data folder,
+`~/.otherwise/rama/` (or wherever you moved the data root in Otherwise Apps). Version 0.4 moves
+them there once from the old folder (`~/Library/Application Support/rama`, `%APPDATA%\rama`,
+`~/.config/rama`), never overwriting anything, and leaves a `.migrated-to-otherwise` note.
+*Show rama's settings folder* is in the app menu and the globe menu; worktrees have *Show in
+Finder* on the map. `OTHERWISE_DATA_DIR` points the data root elsewhere.
+
+**Help → Crea tu tienda en Vcity** (also in About) is a short invitation to
+[Vcity](https://vcity.io), online stores for businesses; the link only carries
+`utm_source=rama`, nothing about you.
+
 ## Build and run
 
 ```sh
