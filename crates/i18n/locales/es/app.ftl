@@ -186,3 +186,5 @@ app.confirm.remote_type = Escribe {branch} para confirmar:
 app.confirm.remote_ok = Eliminar rama remota
 app.prompt.rename_title = Renombrar {name}
 app.prompt.rename_ok = Renombrar
+app.about.more_apps = Más apps de Otherwise en este computador
+app.link.agent_gone = Ese agente ya no está trabajando en este repositorio.

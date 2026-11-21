@@ -186,3 +186,5 @@ app.confirm.remote_type = Digite {branch} para confirmar:
 app.confirm.remote_ok = Excluir branch remoto
 app.prompt.rename_title = Renomear {name}
 app.prompt.rename_ok = Renomear
+app.about.more_apps = Mais apps da Otherwise neste computador
+app.link.agent_gone = Esse agente não está mais trabalhando neste repositório.

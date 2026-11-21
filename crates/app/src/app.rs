@@ -134,6 +134,11 @@ pub struct RamaApp {
     pub convo: Option<crate::convo_view::Convo>,
     pub convo_tab: bool,
     pub(crate) prompt_sub: Option<Subscription>,
+    /// A link asked for this agent's conversation (worktree, session, when); opened once the
+    /// agent poll finds it.
+    pub(crate) pending_convo: Option<(PathBuf, Option<String>, Instant)>,
+    /// Other Otherwise apps installed here, found when About opens.
+    pub(crate) other_apps: Vec<(otherwise_link::apps::AppSpec, otherwise_link::apps::Installed)>,
     _subs: Vec<Subscription>,
 }
 
@@ -220,8 +225,16 @@ impl RamaApp {
             convo: None,
             convo_tab: false,
             prompt_sub: None,
+            pending_convo: None,
+            other_apps: Vec::new(),
             _subs: subs,
         };
+        // a closed window's agents leave Today with it
+        this._subs.push(cx.on_release(|this: &mut RamaApp, _| {
+            if let Some(r) = &this.repo {
+                crate::otherwise::forget_repo(&r.root());
+            }
+        }));
         this.check_git(cx);
         crate::star::refresh(crate::settings::Settings::load().github_stars(), cx);
         if let Some(p) = initial {
@@ -294,6 +307,9 @@ impl RamaApp {
         let same = self.repo.as_ref().is_some_and(|r| r.root() == root);
         let keep = self.selected_id().filter(|_| same);
         if !same {
+            if let Some(old) = &self.repo {
+                crate::otherwise::forget_repo(&old.root());
+            }
             let message = self.work.message.clone();
             message.update(cx, |m, cx| m.set_value("", window, cx));
             let git_missing = self.work.git_missing;
@@ -853,7 +869,54 @@ impl RamaApp {
 
     pub fn show_about(&mut self, cx: &mut Context<Self>) {
         self.about = true;
+        let task = cx.background_executor().spawn(async { crate::otherwise::other_apps(&otherwise_link::apps::Locations::system()) });
+        cx.spawn(async move |this, cx| {
+            let found = task.await;
+            this.update(cx, |this, cx| {
+                this.other_apps = found;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
+    }
+
+    /// Whether this window's repository holds `path` (its folder or one of its worktrees).
+    pub fn covers(&self, path: &std::path::Path) -> bool {
+        let Some(repo) = &self.repo else { return false };
+        let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let p = canon(path);
+        p.starts_with(canon(&repo.root())) || self.agents.listed().iter().any(|w| p.starts_with(canon(w)))
+    }
+
+    /// "More Otherwise apps": the ones installed here, each opening on click.
+    fn render_other_apps(&self, t: &Tokens) -> Option<Div> {
+        if self.other_apps.is_empty() {
+            return None;
+        }
+        let rows = self.other_apps.iter().enumerate().map(|(i, (spec, installed))| {
+            let installed = installed.clone();
+            let hover = t.canvas;
+            div()
+                .id(("about-app", i))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(10.))
+                .px(px(10.))
+                .py(px(5.))
+                .rounded(px(8.))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(div().text_size(px(13.)).child(spec.name.clone()))
+                .child(div().text_size(px(11.)).text_color(t.ink_muted).child(installed.version.clone().unwrap_or_default()))
+                .on_click(move |_, _, _| {
+                    let app = installed.clone();
+                    std::thread::spawn(move || crate::otherwise::launch(&app));
+                })
+        });
+        Some(div().w_full().flex().flex_col().gap(px(4.)).child(div().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(t.ink_muted).child(i18n::t!("app.about.more_apps"))).children(rows))
     }
 
     /// Slim bar at the bottom of every screen: where you are on the left, About on the right.
@@ -939,6 +1002,7 @@ impl RamaApp {
                     .child(crate::star::about_button(t, cx)),
             )
             .child(crate::star::about_ask(t))
+            .children(self.render_other_apps(t))
             .child(div().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.about.license")));
         div()
             .id("about-backdrop")

@@ -856,6 +856,13 @@ impl RamaApp {
                             cx.notify();
                         })))
                     })
+                    .child(Checkbox::new("set-today").small().label(i18n::t!("app.map.set_today")).checked(f.today).on_click(cx.listener(|this, on: &bool, _, cx| {
+                        if let Some(Dialog::Settings(f)) = this.map.dialog.as_mut() {
+                            f.today = *on;
+                        }
+                        cx.notify();
+                    })))
+                    .child(hint(i18n::t!("app.map.set_today_hint")))
                     .into_any_element();
                 (i18n::t!("app.map.settings"), b, i18n::t!("app.map.save"), false, true, |this, cx| this.save_map_settings(cx))
             }
