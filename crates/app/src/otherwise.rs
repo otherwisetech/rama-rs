@@ -160,7 +160,6 @@ pub fn agent_events(found: &Found, now: chrono::DateTime<chrono::Utc>) -> Vec<Ev
             };
             let since = chrono::DateTime::from_timestamp(a.since, 0).unwrap_or(now);
             let mut e = Event::new(format!("agent-{}-{}", slug(&w.to_string_lossy()), slug(&who)), kind, title) // i18n-ok: event id
-                .body(w.display().to_string())
                 .severity(severity)
                 .when(since.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
                 .link(&agent_link(w, a.session_id.as_deref()))
