@@ -188,3 +188,9 @@ app.prompt.rename_title = Rename {name}
 app.prompt.rename_ok = Rename
 app.about.more_apps = More Otherwise apps on this computer
 app.link.agent_gone = That agent isn’t running in this repository anymore.
+
+# data folder, Vcity
+app.menu.help = Help
+app.menu.reveal_data = Show rama’s settings folder
+app.vcity.menu = Create your store on Vcity
+app.vcity.pitch = Sell products or services? Create your business’s online store on Vcity — catalog, orders, payments, bookings, customer chat and more.

@@ -188,3 +188,9 @@ app.prompt.rename_title = Renommer {name}
 app.prompt.rename_ok = Renommer
 app.about.more_apps = Autres apps Otherwise sur cet ordinateur
 app.link.agent_gone = Cet agent ne travaille plus dans ce dépôt.
+
+# data folder, Vcity
+app.menu.help = Aide
+app.menu.reveal_data = Afficher le dossier de réglages de rama
+app.vcity.menu = Créez votre boutique sur Vcity
+app.vcity.pitch = Vous vendez des produits ou des services ? Créez la boutique en ligne de votre entreprise sur Vcity : catalogue, commandes, paiements, réservations, chat avec les clients et bien plus encore.

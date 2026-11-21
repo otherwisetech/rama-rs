@@ -1,4 +1,4 @@
-//! Tiny settings file (`settings.json` in the platform config dir): a flat JSON object of
+//! Tiny settings file (`settings.json` in `<data root>/rama/`, see `storage.rs`): a flat JSON object of
 //! strings and string lists, parsed by hand.
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -41,15 +41,9 @@ enum Val {
     L(Vec<String>),
 }
 
+/// `<data root>/rama/` (moved there from the platform config folder in 0.4, see `storage.rs`).
 fn dir() -> Option<PathBuf> {
-    if cfg!(windows) {
-        return std::env::var_os("APPDATA").filter(|v| !v.is_empty()).map(|d| PathBuf::from(d).join("rama"));
-    }
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    if cfg!(target_os = "macos") {
-        return home.map(|h| h.join("Library/Application Support/rama"));
-    }
-    std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| home.map(|h| h.join(".config"))).map(|d| d.join("rama"))
+    Some(crate::storage::app_dir())
 }
 
 pub fn config_dir() -> Option<PathBuf> {
