@@ -217,6 +217,11 @@ impl RamaApp {
             .child(btn("map-new", IconName::Plus, i18n::t!("app.map.new")).when(!busy, |d| d.on_click(cx.listener(|this, _, window, cx| this.open_new_worktree(None, window, cx)))))
             .child(btn("map-prune", IconName::Delete, i18n::t!("app.map.prune")).when(!busy, |d| d.on_click(cx.listener(|this, _, _, cx| this.ask_prune(cx)))))
             .child(btn("map-clean", IconName::Delete, i18n::t!("app.clean.menu")).when(!busy, |d| d.on_click(cx.listener(|this, _, window, cx| this.open_cleanup(window, cx)))))
+            .child({
+                let free = self.reclaimable(None);
+                let label = if free > 0 { i18n::t!("app.reclaim.menu_size", size = bytes(free)) } else { i18n::t!("app.reclaim.menu") };
+                btn("map-reclaim", IconName::HardDrive, label).when(!busy, |d| d.on_click(cx.listener(|this, _, _, cx| this.open_reclaim(cx))))
+            })
             .child(small("map-settings", IconName::Settings, i18n::t!("app.map.settings")).on_click(cx.listener(|this, _, window, cx| this.open_map_settings(window, cx))))
     }
 
@@ -565,6 +570,10 @@ impl RamaApp {
             let merged = list.iter().filter(|e| e.info.merged && !e.wt.main).count();
             let dirty = list.iter().filter(|e| e.info.changed() > 0).count();
             let prunable = list.iter().filter(|e| e.wt.prunable.is_some()).count();
+            let free = self.reclaimable(None);
+            let shared: u64 = self.map.shared_users.keys().filter_map(|p| self.map.usage(p)).map(|u| u.total).sum();
+            // the main worktree's parent holds the other worktrees (and maybe their siblings)
+            let diskmap = self.map.diskmap.then(|| list.first().map(|m| m.wt.path.parent().map(Path::to_path_buf).unwrap_or_else(|| m.wt.path.clone()))).flatten();
             return panel
                 .child(
                     div()
@@ -578,6 +587,10 @@ impl RamaApp {
                         .child(div().text_size(px(13.)).text_color(t.ink_muted).child(i18n::tn!("app.map.n_merged", merged)))
                         .child(div().text_size(px(13.)).text_color(t.ink_muted).child(i18n::tn!("app.map.n_dirty", dirty)))
                         .when(prunable > 0, |d| d.child(div().text_size(px(13.)).text_color(t.danger).child(i18n::tn!("app.map.n_prunable", prunable))))
+                        .child(div().text_size(px(13.)).text_color(if free > 0 { t.accent } else { t.ink_muted }).child(i18n::t!("app.reclaim.total", size = bytes(free))))
+                        .when(shared > 0, |d| d.child(div().text_size(px(12.)).text_color(t.ink_muted).child(i18n::t!("app.reclaim.shared_total", size = bytes(shared)))))
+                        .child(ui::outline_button(t, "totals-reclaim").h(px(30.)).text_size(px(12.5)).child(icon(IconName::HardDrive, 14., t.ink)).child(i18n::t!("app.reclaim.menu")).on_click(cx.listener(|this, _, _, cx| this.open_reclaim(cx))))
+                        .when_some(diskmap, |d, scan| d.child(ui::outline_button(t, "totals-diskmap").h(px(30.)).text_size(px(12.5)).child(icon(IconName::ChartPie, 14., t.ink)).child(i18n::t!("app.reclaim.open_diskmap")).on_click(cx.listener(move |this, _, _, cx| this.open_in_diskmap(scan.clone(), cx)))))
                         .child(div().pt(px(8.)).text_size(px(12.)).line_height(px(17.)).text_color(t.ink_muted).child(i18n::t!("app.map.select_hint"))),
                 )
                 .into_any_element();
@@ -633,6 +646,10 @@ impl RamaApp {
             None => div().into_any_element(),
         };
         info = info.child(div().flex().flex_col().gap(px(2.)).child(div().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(t.ink_muted).child(i18n::t!("app.map.col_size"))).child(size));
+        let free = self.reclaimable(Some(&e.wt.path));
+        if free > 0 {
+            info = info.child(div().id("wt-reclaim").text_size(px(12.)).text_color(t.accent).cursor_pointer().child(i18n::t!("app.reclaim.worktree", size = bytes(free))).on_click(cx.listener(|this, _, _, cx| this.open_reclaim(cx))));
+        }
 
         let path = e.wt.path.clone();
         let action = |id: &'static str, ic: IconName, label: String, enabled: bool| ui::outline_button(t, id).w_full().h(px(30.)).text_size(px(12.5)).child(icon(ic, 14., t.ink)).child(label).when(!enabled, |d| d.opacity(0.45).cursor_default());
@@ -644,6 +661,10 @@ impl RamaApp {
         actions = actions.child(action("act-rama", IconName::ExternalLink, i18n::t!("app.map.open_rama"), !missing).when(!missing, |d| d.on_click(cx.listener(move |this, _, _, cx| this.open_in_new_window(p.clone(), cx)))));
         let p = path.clone();
         actions = actions.child(action("act-copy", IconName::Copy, i18n::t!("app.map.copy_path"), true).on_click(cx.listener(move |this, _, _, cx| this.copy_path(&p, cx))));
+        if self.map.diskmap {
+            let p = path.clone();
+            actions = actions.child(action("act-diskmap", IconName::ChartPie, i18n::t!("app.reclaim.open_diskmap"), !missing).when(!missing, |d| d.on_click(cx.listener(move |this, _, _, cx| this.open_in_diskmap(p.clone(), cx)))));
+        }
         let p = path.clone();
         actions = actions.child(action("act-term", IconName::SquareTerminal, i18n::t!("app.map.open_terminal"), !missing).when(!missing, |d| d.on_click(cx.listener(move |this, _, _, cx| this.launch(p.clone(), None, cx)))));
         let agents = self.map.agent_commands();
@@ -863,6 +884,15 @@ impl RamaApp {
                         cx.notify();
                     })))
                     .child(hint(i18n::t!("app.map.set_today_hint")))
+                    .child(label(i18n::t!("app.reclaim.set_days")))
+                    .child(Input::new(&f.stale_days))
+                    .child(hint(i18n::t!("app.reclaim.set_days_hint")))
+                    .child(Checkbox::new("set-disk-today").small().label(i18n::t!("app.reclaim.set_today")).checked(f.disk_today).on_click(cx.listener(|this, on: &bool, _, cx| {
+                        if let Some(Dialog::Settings(f)) = this.map.dialog.as_mut() {
+                            f.disk_today = *on;
+                        }
+                        cx.notify();
+                    })))
                     .into_any_element();
                 (i18n::t!("app.map.settings"), b, i18n::t!("app.map.save"), false, true, |this, cx| this.save_map_settings(cx))
             }

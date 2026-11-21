@@ -1,14 +1,16 @@
 //! Worktree map state: the worktree list with status and distances (loaded in the background),
-//! disk sizes (measured one worktree at a time, cached on disk), pan / zoom, the dialogs, and
-//! the actions (terminal, agent, remove, lock, prune, new worktree).
+//! disk sizes (measured one worktree at a time, cached on disk, plus cargo target folders kept
+//! outside the repository), pan / zoom, the dialogs, and the actions (terminal, agent, remove,
+//! lock, prune, new worktree).
 use crate::app::RamaApp;
 use crate::launch::{self, Launch, Term};
 use crate::work::{GitKind, Op};
 use gpui::*;
 use gpui_component::input::{InputEvent, InputState};
+use repo::reclaim::Suggestion;
 use repo::{BaseRef, Cancel, DiskUsage, NewWorktree, Repo, WorktreeEntry};
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -59,6 +61,8 @@ pub struct SettingsForm {
     pub reduce_motion: bool,
     pub notify: bool,
     pub today: bool,
+    pub stale_days: Entity<InputState>,
+    pub disk_today: bool,
 }
 
 pub enum Dialog {
@@ -96,6 +100,15 @@ pub struct MapState {
     pub terminals: Rc<Vec<Term>>,
     pub agents: Rc<Vec<String>>,
     detected: bool,
+    /// Cargo target folders outside the repository → the worktrees building there.
+    pub shared_users: BTreeMap<PathBuf, Vec<PathBuf>>,
+    /// What "Free up space…" would offer, from the sizes measured so far.
+    pub reclaim: Rc<Vec<Suggestion>>,
+    pub reclaim_dialog: Option<crate::reclaim::ReclaimDialog>,
+    /// Open "Free up space…" once the worktrees are loaded (a Today link asked for it).
+    pub want_reclaim: bool,
+    /// diskmap is installed (for "Open in diskmap").
+    pub diskmap: bool,
 }
 
 impl Default for MapState {
@@ -122,6 +135,11 @@ impl Default for MapState {
             terminals: Rc::new(Vec::new()),
             agents: Rc::new(Vec::new()),
             detected: false,
+            shared_users: BTreeMap::new(),
+            reclaim: Rc::new(Vec::new()),
+            reclaim_dialog: None,
+            want_reclaim: false,
+            diskmap: false,
         }
     }
 }
@@ -171,35 +189,100 @@ impl MapState {
 }
 
 fn size_cache_file() -> Option<PathBuf> {
-    crate::settings::config_dir().map(|d| d.join("sizes.tsv"))
+    crate::settings::config_dir().map(|d| d.join("sizes.json"))
 }
 
-/// `path \t total \t files \t measured-at \t name=bytes;…` per line.
-fn load_size_cache() -> HashMap<PathBuf, Size> {
-    let Some(text) = size_cache_file().and_then(|f| std::fs::read_to_string(f).ok()) else { return HashMap::new() };
-    text.lines()
-        .filter_map(|l| {
-            let f: Vec<&str> = l.split('\t').collect();
-            let parts = f.get(4).map(|p| p.split(';').filter_map(|kv| kv.split_once('=').and_then(|(k, v)| Some((k.to_string(), v.parse().ok()?)))).collect()).unwrap_or_default();
-            let usage = DiskUsage { total: f.get(1)?.parse().ok()?, files: f.get(2)?.parse().ok()?, parts, partial: false };
-            Some((PathBuf::from(f.first()?), Size::Done { usage, at: f.get(3)?.parse().ok()? }))
+fn pairs(v: &[(PathBuf, u64)]) -> serde_json::Value {
+    serde_json::Value::Array(v.iter().map(|(p, n)| serde_json::json!([p.to_string_lossy(), n])).collect())
+}
+
+fn unpairs(v: Option<&serde_json::Value>) -> Vec<(PathBuf, u64)> {
+    v.and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| Some((PathBuf::from(x.get(0)?.as_str()?), x.get(1)?.as_u64()?))).collect()).unwrap_or_default()
+}
+
+/// `{ "<path>": { total, files, at, touched, parts: {name: bytes}, artifacts: [[path, bytes]…], incremental: […] } }`
+pub fn parse_size_cache(text: &str) -> HashMap<PathBuf, Size> {
+    let Ok(serde_json::Value::Object(m)) = serde_json::from_str::<serde_json::Value>(text) else { return HashMap::new() };
+    m.into_iter()
+        .filter_map(|(k, v)| {
+            let mut parts: Vec<(String, u64)> = v.get("parts").and_then(|p| p.as_object()).map(|o| o.iter().filter_map(|(n, b)| Some((n.clone(), b.as_u64()?))).collect()).unwrap_or_default();
+            parts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            let usage = DiskUsage {
+                total: v.get("total")?.as_u64()?,
+                files: v.get("files")?.as_u64()?,
+                parts,
+                partial: false,
+                touched: v.get("touched").and_then(|t| t.as_i64()).unwrap_or(0),
+                artifacts: unpairs(v.get("artifacts")),
+                incremental: unpairs(v.get("incremental")),
+            };
+            Some((PathBuf::from(k), Size::Done { usage, at: v.get("at")?.as_i64()? }))
         })
         .collect()
 }
 
+pub fn size_cache_json(sizes: &HashMap<PathBuf, Size>) -> String {
+    let mut m = serde_json::Map::new();
+    let mut keys: Vec<&PathBuf> = sizes.keys().collect();
+    keys.sort();
+    for p in keys {
+        if let Some(Size::Done { usage, at }) = sizes.get(p)
+            && !usage.partial
+        {
+            let parts: serde_json::Map<String, serde_json::Value> = usage.parts.iter().map(|(k, v)| (k.clone(), (*v).into())).collect();
+            m.insert(p.to_string_lossy().into_owned(), serde_json::json!({ "total": usage.total, "files": usage.files, "at": at, "touched": usage.touched, "parts": parts, "artifacts": pairs(&usage.artifacts), "incremental": pairs(&usage.incremental) }));
+        }
+    }
+    serde_json::to_string(&serde_json::Value::Object(m)).unwrap_or_default()
+}
+
+fn load_size_cache() -> HashMap<PathBuf, Size> {
+    size_cache_file().and_then(|f| std::fs::read_to_string(f).ok()).map(|t| parse_size_cache(&t)).unwrap_or_default()
+}
+
 fn save_size_cache(sizes: &HashMap<PathBuf, Size>) {
     let Some(f) = size_cache_file() else { return };
-    let lines: Vec<String> = sizes
-        .iter()
-        .filter_map(|(p, s)| match s {
-            Size::Done { usage, at } if !usage.partial => Some(format!("{}\t{}\t{}\t{at}\t{}", p.display(), usage.total, usage.files, usage.parts.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(";"))),
-            _ => None,
-        })
-        .collect();
     if let Some(d) = f.parent() {
         let _ = std::fs::create_dir_all(d);
     }
-    let _ = std::fs::write(f, lines.join("\n"));
+    let _ = std::fs::write(f, size_cache_json(sizes));
+}
+
+/// Cargo target folders outside each worktree (`CARGO_TARGET_DIR` from the login shell, or
+/// `build.target-dir` in a `.cargo/config.toml`), with the worktrees that use them.
+fn detect_shared(worktrees: &[PathBuf]) -> BTreeMap<PathBuf, Vec<PathBuf>> {
+    let env = repo::shell_env::resolved();
+    let var = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let cargo_home = var("CARGO_HOME").map(PathBuf::from).or_else(|| var("HOME").map(|h| PathBuf::from(h).join(".cargo"))); // i18n-ok: env names
+    let target_env = var("CARGO_TARGET_DIR"); // i18n-ok: env name
+    let mut out: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    for w in worktrees {
+        if let Some(t) = repo::reclaim::cargo_target_dir(w, target_env.as_deref(), cargo_home.as_deref()) {
+            out.entry(t).or_default().push(w.clone());
+        }
+    }
+    for v in out.values_mut() {
+        v.sort();
+    }
+    out
+}
+
+/// `<data root>/rama/worktrees.txt`: every worktree rama has listed, one path per line, so
+/// diskmap can mark them. Paths that no longer exist drop out.
+fn remember_worktrees(paths: &[PathBuf]) {
+    let Some(f) = crate::settings::config_dir().map(|d| d.join("worktrees.txt")) else { return };
+    let old = std::fs::read_to_string(&f).unwrap_or_default();
+    let mut all: Vec<String> = old.lines().filter(|l| !l.trim().is_empty() && Path::new(l).is_dir()).map(str::to_string).collect();
+    all.extend(paths.iter().filter(|p| p.is_dir()).map(|p| p.to_string_lossy().into_owned()));
+    all.sort();
+    all.dedup();
+    let text = all.join("\n") + "\n";
+    if text != old {
+        if let Some(d) = f.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(f, text);
+    }
 }
 
 impl RamaApp {
@@ -218,12 +301,13 @@ impl RamaApp {
             return;
         }
         self.map.detected = true;
-        let task = cx.background_executor().spawn(async move { (launch::detect_terminals(), launch::detect_agents()) });
+        let task = cx.background_executor().spawn(async move { (launch::detect_terminals(), launch::detect_agents(), crate::otherwise::diskmap_installed()) });
         cx.spawn(async move |this, cx| {
-            let (terms, agents) = task.await;
+            let (terms, agents, diskmap) = task.await;
             this.update(cx, |this, cx| {
                 this.map.terminals = Rc::new(terms);
                 this.map.agents = Rc::new(agents);
+                this.map.diskmap = diskmap;
                 cx.notify();
             })
             .ok();
@@ -266,7 +350,15 @@ impl RamaApp {
                     this.map.selected = None;
                 }
                 if ok {
+                    if let Some(l) = this.map.list() {
+                        let paths: Vec<PathBuf> = l.iter().filter(|e| e.wt.prunable.is_none()).map(|e| e.wt.path.clone()).collect();
+                        cx.background_executor().spawn(async move { remember_worktrees(&paths) }).detach();
+                    }
                     this.measure_sizes(sizes, cx);
+                    this.refresh_reclaim(cx);
+                    if std::mem::take(&mut this.map.want_reclaim) {
+                        this.open_reclaim(cx);
+                    }
                 }
                 cx.notify();
             })
@@ -300,9 +392,6 @@ impl RamaApp {
                 }
             }
         }
-        if todo.is_empty() {
-            return;
-        }
         cx.spawn(async move |this, cx| {
             for (path, skip) in todo {
                 if cancel.is_cancelled() {
@@ -315,12 +404,41 @@ impl RamaApp {
                         this.map.sizes.insert(path, Size::Done { usage, at: crate::util::now() });
                         save_size_cache(&this.map.sizes);
                     }
+                    this.refresh_reclaim(cx);
                     cx.notify();
                 });
                 if alive.is_err() {
                     break;
                 }
             }
+            if cancel.is_cancelled() {
+                return;
+            }
+            let shared = cx.background_executor().spawn(async move { detect_shared(&all) }).await;
+            let targets: Vec<PathBuf> = shared.keys().cloned().collect();
+            if this.update(cx, |this, _| this.map.shared_users = shared).is_err() {
+                return;
+            }
+            for t in targets {
+                let stale = this.update(cx, |this, _| force || !matches!(this.map.sizes.get(&t), Some(Size::Done { at, .. }) if crate::util::now() - at < SIZE_FRESH)).unwrap_or(false);
+                if !stale || cancel.is_cancelled() {
+                    continue;
+                }
+                let (p, c) = (t.clone(), cancel.clone());
+                let usage = cx.background_executor().spawn(async move { repo::target_usage(&p, &c) }).await;
+                let alive = this.update(cx, |this, cx| {
+                    if !usage.partial {
+                        this.map.sizes.insert(t, Size::Done { usage, at: crate::util::now() });
+                        save_size_cache(&this.map.sizes);
+                    }
+                    this.refresh_reclaim(cx);
+                    cx.notify();
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+            this.update(cx, |this, cx| this.refresh_reclaim(cx)).ok();
         })
         .detach();
     }
@@ -526,7 +644,8 @@ impl RamaApp {
         let protected = mk(s.protected_patterns().join(", "), String::new(), window, cx);
         let base_dir = mk(s.worktree_base.clone().unwrap_or_default(), self.main_path().and_then(|m| m.parent().map(|p| p.display().to_string())).unwrap_or_default(), window, cx);
         let agents = mk(agents.replace('\n', ", "), launch::AGENTS.join(", "), window, cx);
-        self.map.dialog = Some(Dialog::Settings(SettingsForm { default_branch, protected, base_dir, agents, terminal: s.terminal.clone(), badges: s.agent_badges(), reduce_motion: s.reduce_motion(), notify: s.agent_notify(), today: s.agent_today() }));
+        let stale_days = mk(s.stale_days().to_string(), repo::reclaim::DEFAULT_STALE_DAYS.to_string(), window, cx);
+        self.map.dialog = Some(Dialog::Settings(SettingsForm { default_branch, protected, base_dir, agents, terminal: s.terminal.clone(), badges: s.agent_badges(), reduce_motion: s.reduce_motion(), notify: s.agent_notify(), today: s.agent_today(), stale_days, disk_today: s.disk_today() }));
         cx.notify();
     }
 
@@ -536,6 +655,7 @@ impl RamaApp {
         let split = |v: String| v.split([',', '\n']).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).collect::<Vec<_>>();
         let (db, prot, base, agents) = (val(&f.default_branch), split(val(&f.protected)), val(&f.base_dir), split(val(&f.agents)));
         let detected = self.map.agents.as_ref().clone();
+        let stale = val(&f.stale_days).parse::<u32>().ok().filter(|d| *d > 0 && *d != repo::reclaim::DEFAULT_STALE_DAYS);
         crate::settings::Settings::update(|s| {
             s.default_branch = (!db.is_empty()).then_some(db);
             // the built-in list is stored as "unset" so later defaults still apply
@@ -547,10 +667,13 @@ impl RamaApp {
             s.reduce_motion = f.reduce_motion.then(|| "on".into()); // i18n-ok: setting value
             s.agent_notify = f.notify.then(|| "on".into()); // i18n-ok: setting value
             s.agent_today = (!f.today).then(|| "off".into()); // i18n-ok: setting value
+            s.stale_days = stale.map(|d| d.to_string());
+            s.disk_today = (!f.disk_today).then(|| "off".into()); // i18n-ok: setting value
         });
         self.agents.today = f.today;
         self.set_agent_prefs(f.badges, f.reduce_motion, f.notify, cx);
         self.reload_map(false, cx);
+        self.refresh_reclaim(cx);
         cx.notify();
     }
 
@@ -620,5 +743,32 @@ pub fn expand_home(p: &str) -> String {
     match (p.strip_prefix("~/"), std::env::var("HOME")) {
         (Some(rest), Ok(h)) => format!("{h}/{rest}"),
         _ => p.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Size, parse_size_cache, size_cache_json};
+    use repo::DiskUsage;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn size_cache_round_trips_build_folders() {
+        let p = PathBuf::from("/w/app \"ñ\"\tx");
+        let usage = DiskUsage { total: 900, files: 4, parts: vec![("target".into(), 500), ("node_modules".into(), 200)], partial: false, touched: 1_700_000_000, artifacts: vec![(p.join("node_modules"), 200), (p.join("target"), 500)], incremental: vec![(p.join("target/debug/incremental"), 100)] };
+        let mut sizes = HashMap::new();
+        sizes.insert(p.clone(), Size::Done { usage: usage.clone(), at: 42 });
+        sizes.insert(PathBuf::from("/w/measuring"), Size::Measuring);
+        sizes.insert(PathBuf::from("/w/partial"), Size::Done { usage: DiskUsage { partial: true, ..Default::default() }, at: 1 });
+        let json = size_cache_json(&sizes);
+        assert_eq!(json, size_cache_json(&sizes), "stable output");
+        let back = parse_size_cache(&json);
+        assert_eq!(back.len(), 1);
+        match back.get(&p) {
+            Some(Size::Done { usage: u, at }) => assert_eq!((u, *at), (&usage, 42)),
+            other => panic!("{other:?}"),
+        }
+        assert!(parse_size_cache("not json").is_empty());
     }
 }

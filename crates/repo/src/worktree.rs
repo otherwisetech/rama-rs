@@ -174,54 +174,123 @@ pub struct DiskUsage {
     pub parts: Vec<(String, u64)>,
     /// Stopped early (cancelled).
     pub partial: bool,
+    /// Newest modification time (seconds since the epoch) of anything outside the heavy
+    /// folders: when someone last worked here ([`target_usage`]: of anything in it, i.e. the
+    /// last build). 0 when nothing was found.
+    pub touched: i64,
+    /// Regenerable build folders (`target/` of cargo or maven, `node_modules/`, `.next/`), the
+    /// outermost of each, with their size; sorted by path.
+    pub artifacts: Vec<(PathBuf, u64)>,
+    /// `incremental/` caches inside those `target/` folders (`target/debug/incremental`,
+    /// `target/<triple>/release/incremental`…), sorted by path.
+    pub incremental: Vec<(PathBuf, u64)>,
 }
 
 /// Folder names reported separately in [`DiskUsage::parts`].
 pub const HEAVY_DIRS: &[&str] = &["node_modules", ".git", "target", ".next", ".turbo", ".venv", ".gradle", "Pods", "vendor"];
 
+/// Is `dir` (a folder named like a build artifact) really one? `target/` only next to a
+/// `Cargo.toml` / `pom.xml` or tagged by cargo (`CACHEDIR.TAG`), `.next/` only next to a
+/// `package.json`; `node_modules/` always.
+pub fn is_artifact_dir(dir: &Path) -> bool {
+    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let parent = dir.parent().unwrap_or(dir);
+    match name.as_str() {
+        "node_modules" => true,
+        "target" => dir.join("CACHEDIR.TAG").is_file() || parent.join("Cargo.toml").is_file() || parent.join("pom.xml").is_file(),
+        ".next" => parent.join("package.json").is_file(),
+        _ => false,
+    }
+}
+
 /// Size on disk of everything under `root` (symlinks are not followed; hard-linked files count
 /// once, like `du`). Directories in `skip` (other worktrees nested inside this one) are left
 /// out, so each byte is counted on one node only.
 pub fn disk_usage(root: &Path, skip: &[PathBuf], cancel: &Cancel) -> DiskUsage {
+    walk(root, skip, cancel, false)
+}
+
+/// [`disk_usage`] of a cargo target directory kept outside the repository
+/// (`CARGO_TARGET_DIR`, `build.target-dir`): the whole folder is one artifact.
+pub fn target_usage(root: &Path, cancel: &Cancel) -> DiskUsage {
+    walk(root, &[], cancel, true)
+}
+
+struct Walk {
+    dir: PathBuf,
+    heavy: Option<String>,
+    artifact: Option<usize>,
+    in_target: bool,
+    incremental: Option<usize>,
+}
+
+fn walk(root: &Path, skip: &[PathBuf], cancel: &Cancel, root_is_target: bool) -> DiskUsage {
     let mut out = DiskUsage::default();
     let mut parts: HashMap<String, u64> = HashMap::new();
     let mut seen: HashSet<(u64, u64)> = HashSet::new();
-    // (dir, heavy folder it is inside)
-    let mut stack: Vec<(PathBuf, Option<String>)> = vec![(root.to_path_buf(), None)];
-    while let Some((dir, heavy)) = stack.pop() {
+    if root_is_target {
+        out.artifacts.push((root.to_path_buf(), 0));
+    }
+    let mut stack = vec![Walk { dir: root.to_path_buf(), heavy: root_is_target.then(|| "target".to_string()), artifact: root_is_target.then_some(0), in_target: root_is_target, incremental: None }];
+    while let Some(w) = stack.pop() {
         if cancel.is_cancelled() {
             out.partial = true;
             break;
         }
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&w.dir) else { continue };
         for e in rd.flatten() {
             let Ok(md) = e.metadata() else { continue };
+            let p = e.path();
+            if md.is_dir() && skip.contains(&p) {
+                continue;
+            }
             let size = on_disk(&md, &mut seen);
             out.total += size;
-            if let Some(h) = &heavy {
+            if let Some(h) = &w.heavy {
                 *parts.entry(h.clone()).or_default() += size;
             }
-            if md.is_dir() {
-                let p = e.path();
-                if skip.contains(&p) {
-                    out.total -= size;
-                    if let Some(h) = &heavy {
-                        *parts.entry(h.clone()).or_default() -= size;
-                    }
-                    continue;
-                }
-                let name = e.file_name().to_string_lossy().into_owned();
-                let h = heavy.clone().or_else(|| HEAVY_DIRS.contains(&name.as_str()).then_some(name));
-                stack.push((p, h));
-            } else {
-                out.files += 1;
+            // a shared target folder's own age tells whether any build (of any repo) used it lately
+            if w.heavy.is_none() || root_is_target {
+                out.touched = out.touched.max(mtime(&md));
             }
+            if let Some(a) = w.artifact {
+                out.artifacts[a].1 += size;
+            }
+            if let Some(i) = w.incremental {
+                out.incremental[i].1 += size;
+            }
+            if !md.is_dir() {
+                out.files += 1;
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().into_owned();
+            let mut next = Walk { dir: p, heavy: w.heavy.clone(), artifact: w.artifact, in_target: w.in_target, incremental: w.incremental };
+            if w.heavy.is_none() {
+                if HEAVY_DIRS.contains(&name.as_str()) {
+                    next.heavy = Some(name.clone());
+                }
+                if is_artifact_dir(&next.dir) {
+                    out.artifacts.push((next.dir.clone(), size));
+                    next.artifact = Some(out.artifacts.len() - 1);
+                    next.in_target = name == "target";
+                }
+            } else if w.in_target && w.incremental.is_none() && name == "incremental" {
+                out.incremental.push((next.dir.clone(), size));
+                next.incremental = Some(out.incremental.len() - 1);
+            }
+            stack.push(next);
         }
     }
     let mut parts: Vec<(String, u64)> = parts.into_iter().filter(|(_, v)| *v > 0).collect();
     parts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     out.parts = parts;
+    out.artifacts.sort();
+    out.incremental.sort();
     out
+}
+
+fn mtime(md: &std::fs::Metadata) -> i64 {
+    md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 #[cfg(unix)]

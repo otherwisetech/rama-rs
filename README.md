@@ -54,7 +54,20 @@ Linux. UI in Spanish, English, Portuguese and French.
   ones are dimmed; edges use the branch's lane colour. Drag or scroll to pan; ⌘+scroll, pinch or
   ⌘+/− to zoom (⌘0 resets). A list mode sorts by path, size, age or merged for many worktrees.
   Sizes are measured in the background one worktree at a time (nested worktrees count only on
-  their own card, hard links once) and cached.
+  their own card, hard links once) and cached; cargo target folders kept outside the repository
+  (`CARGO_TARGET_DIR` in your login shell, or `build.target-dir` in a `.cargo/config.toml`) are
+  measured too and shown in the repository's totals.
+- **Free up space…** (map toolbar, totals panel, a worktree's panel) offers, with every path and
+  size listed before anything happens: worktrees whose branch is merged into the default branch
+  with nothing uncommitted or unpushed (`git worktree remove`, optionally `git branch -d`);
+  cargo's `target/**/incremental` caches; the whole `target/` and the `node_modules/` / `.next/`
+  of worktrees untouched for 14 days (configurable). Build folders are deleted directly (they are
+  regenerated, and the Trash would keep the space); the dialog says so. Worktrees with
+  uncommitted changes, locked ones, the one open in the window and protected branches are never
+  touched, nothing outside the listed worktree or target folders is deleted, a committed
+  `node_modules` is kept, and every rule is checked again right before each delete.
+  *Open in diskmap* shows the folder in [diskmap](https://github.com/otherwisetech/diskmap-rs)
+  when it's installed.
 - Worktree actions (side panel and right-click): open in the file manager, open in a new rama
   window, copy the path, open your terminal there, **start an AI agent there** (`claude`,
   `codex`, `opencode`, `pi`, `gemini`, `aider` when found on your login-shell PATH, or your own
@@ -166,6 +179,9 @@ Otherwise Technologies' apps share. Everything stays on your computer.
   | `otherwise://rama` | brings rama to the front |
   | `otherwise://rama/repo?path=/Users/me/code/app` | shows that repository (the window that has it, else a new one) |
   | `otherwise://rama/agent?worktree=/Users/me/code/app-wt&session=<id>` | opens the worktree map and that agent's Conversation tab |
+  | `otherwise://rama/reclaim?path=/Users/me/code/app` | shows that repository's worktree map and *Free up space…* |
+
+  rama opens `otherwise://diskmap/scan?path=…` for *Open in diskmap*.
 
   macOS registers the scheme from the app's `Info.plist`; Windows registers it for your user
   (`HKCU\Software\Classes\otherwise-rama`) when rama starts; on Linux `rama.desktop` declares
@@ -177,13 +193,17 @@ Otherwise Technologies' apps share. Everything stays on your computer.
   (`today/rama.json` in the shared Otherwise folder), never titles or conversation text. The
   list comes from the same poll as the badges, so it is only refreshed while rama is on screen;
   entries expire 30 minutes after the last poll and are removed when rama quits. Turn it off in
-  the worktree map's settings.
+  the worktree map's settings. A repository open in rama that could free more than 10 GB gets an
+  entry too (its folder name and the size only), linking to *Free up space…*; it expires after a
+  day, is removed on quit and has its own switch in the same settings.
 - **About** lists the other Otherwise apps installed on this computer; click one to open it.
 
 ## Where files live
 
 rama works on your repositories in place and keeps no documents of its own. Its settings, recent
-repositories and small caches (folder sizes, star count) are in the Otherwise data folder,
+repositories and small caches (folder sizes in `sizes.json`, star count) are in the Otherwise
+data folder, plus `worktrees.txt`, the worktree folders rama has listed (one per line, so diskmap
+can mark them), all
 `~/.otherwise/rama/` (or wherever you moved the data root in Otherwise Apps). Version 0.4 moves
 them there once from the old folder (`~/Library/Application Support/rama`, `%APPDATA%\rama`,
 `~/.config/rama`), never overwriting anything, and leaves a `.migrated-to-otherwise` note.

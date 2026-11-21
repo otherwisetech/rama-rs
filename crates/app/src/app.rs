@@ -1123,6 +1123,7 @@ impl Render for RamaApp {
             .children(self.render_modal(&t, cx))
             .children(self.render_cleanup(&t, cx))
             .children(self.render_map_dialog(&t, cx))
+            .children(self.render_reclaim(&t, cx))
     }
 }
 
