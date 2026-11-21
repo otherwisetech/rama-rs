@@ -1,5 +1,6 @@
-//! otherwise-link: `otherwise-rama://` links in, other Otherwise apps in About, and agents that
-//! wait for you in Otherwise Apps' Today view.
+//! otherwise-link: `otherwise-rama://` links in, other Otherwise apps in About, agents that
+//! wait for you and repositories with a lot of space to free in Otherwise Apps' Today view,
+//! and "Open in diskmap".
 use crate::agents::{Agent, AgentState, ErrKind, Found, Need};
 use otherwise_link::apps::{self, AppSpec, Installed, Locations};
 use otherwise_link::today::{self, Event, EventKind, Severity};
@@ -24,6 +25,8 @@ pub enum Action {
     Repo(PathBuf),
     /// Open the conversation of the agent working in `worktree` (the session's, if given).
     Agent { worktree: PathBuf, session: Option<String> },
+    /// Show the repository containing this folder and open "Free up space…".
+    Reclaim(PathBuf),
 }
 
 fn abs(link: &Link, key: &str) -> Option<PathBuf> {
@@ -37,6 +40,7 @@ pub fn action(link: &Link) -> Option<Action> {
     }
     Some(match link.at(0) {
         Some("repo") => abs(link, "path").map(Action::Repo).unwrap_or(Action::Focus),
+        Some("reclaim") => abs(link, "path").map(Action::Reclaim).unwrap_or(Action::Focus),
         Some("agent") => match abs(link, "worktree") {
             Some(worktree) => Action::Agent { worktree, session: link.get("session").filter(|s| !s.is_empty()).map(str::to_string) },
             None => Action::Focus,
@@ -48,6 +52,24 @@ pub fn action(link: &Link) -> Option<Action> {
 #[cfg(test)]
 fn repo_link(path: &Path) -> Link {
     Link::new(APP_ID).segment("repo").param("path", path.to_string_lossy())
+}
+
+pub fn reclaim_link(repo: &Path) -> Link {
+    Link::new(APP_ID).segment("reclaim").param("path", repo.to_string_lossy())
+}
+
+/// `otherwise://diskmap/scan?path=…`
+pub fn diskmap_link(path: &Path) -> Link {
+    Link::new("diskmap").segment("scan").param("path", path.to_string_lossy()) // i18n-ok: app id
+}
+
+pub fn diskmap_installed() -> bool {
+    apps::known("diskmap").is_some_and(|k| apps::detect(&k.spec(), &Locations::system()).is_some()) // i18n-ok: app id
+}
+
+/// Opens diskmap on `path` (its own scheme, else through Otherwise Apps).
+pub fn open_in_diskmap(path: &Path) -> std::io::Result<()> {
+    otherwise_link::open::open_link(&diskmap_link(path)).map(|_| ())
 }
 
 pub fn agent_link(worktree: &Path, session: Option<&str>) -> Link {
@@ -171,12 +193,32 @@ pub fn agent_events(found: &Found, now: chrono::DateTime<chrono::Utc>) -> Vec<Ev
     out
 }
 
+/// A repository that could give back more than [`repo::reclaim::TODAY_THRESHOLD`]. Only its
+/// folder name and the size go out; it expires after a day and is cleared on quit.
+pub fn reclaim_event(repo: &Path, bytes: u64, now: chrono::DateTime<chrono::Utc>) -> Option<Event> {
+    if bytes <= repo::reclaim::TODAY_THRESHOLD {
+        return None;
+    }
+    let name = repo.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| repo.display().to_string());
+    let mut e = Event::new(format!("reclaim-{}", slug(&repo.to_string_lossy())), EventKind::Info, i18n::t!("app.today.reclaim", size = crate::util::bytes(bytes), repo = name)) // i18n-ok: event id
+        .body(i18n::t!("app.today.reclaim_body"))
+        .severity(Severity::Normal)
+        .when(now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .link(&reclaim_link(repo))
+        .expires((now + chrono::Duration::days(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    e.id.truncate(200);
+    Some(e)
+}
+
 /// Each window's latest events, by repository; the feed is their union.
 static FEEDS: Mutex<BTreeMap<PathBuf, Vec<Event>>> = Mutex::new(BTreeMap::new());
+/// The space-to-free entry of each repository shown in a window.
+static DISK: Mutex<BTreeMap<PathBuf, Event>> = Mutex::new(BTreeMap::new());
 
 fn publish_all(feeds: &BTreeMap<PathBuf, Vec<Event>>) {
+    let disk = DISK.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect::<Vec<_>>();
     let mut all: Vec<Event> = Vec::new();
-    for e in feeds.values().flatten() {
+    for e in feeds.values().flatten().chain(disk.iter()) {
         if !all.iter().any(|x| x.id == e.id) {
             all.push(e.clone());
         }
@@ -205,10 +247,34 @@ pub fn set_repo_events(repo: &Path, events: Vec<Event>) {
     publish_all(&feeds);
 }
 
+/// The space-to-free entry of `repo` (`None` removes it). Republished only when its title or
+/// expiry day changes, so a slowly moving size doesn't rewrite the file on every measurement.
+pub fn set_disk_event(repo: &Path, event: Option<Event>) {
+    let feeds = FEEDS.lock().unwrap_or_else(|e| e.into_inner());
+    let changed = {
+        let mut disk = DISK.lock().unwrap_or_else(|e| e.into_inner());
+        // the expiry's day too, so an entry still true tomorrow is renewed once a day
+        let key = |e: &Event| (e.title.clone(), e.expires.as_deref().map(|x| x.chars().take(10).collect::<String>()));
+        if disk.get(repo).map(key) == event.as_ref().map(key) {
+            false
+        } else {
+            match event {
+                Some(e) => disk.insert(repo.to_path_buf(), e),
+                None => disk.remove(repo),
+            };
+            true
+        }
+    };
+    if changed {
+        publish_all(&feeds);
+    }
+}
+
 /// The window stopped showing `repo` (closed, another repo, badges off).
 pub fn forget_repo(repo: &Path) {
     let mut feeds = FEEDS.lock().unwrap_or_else(|e| e.into_inner());
-    if feeds.remove(repo).is_some() {
+    let had_disk = DISK.lock().unwrap_or_else(|e| e.into_inner()).remove(repo).is_some();
+    if feeds.remove(repo).is_some() || had_disk {
         publish_all(&feeds);
     }
 }
@@ -216,6 +282,7 @@ pub fn forget_repo(repo: &Path) {
 /// Quitting: nothing of ours stays in Today.
 pub fn clear_today() {
     FEEDS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    DISK.lock().unwrap_or_else(|e| e.into_inner()).clear();
     let _ = today::clear(&Root::system(), APP_ID);
 }
 
@@ -236,6 +303,34 @@ mod tests {
         assert!(l.to_url().starts_with("otherwise://rama/agent?worktree="));
         assert_eq!(action(&Link::parse(&l.to_url()).unwrap()), Some(Action::Agent { worktree: repo.clone(), session: Some("abc-123".into()) }));
         assert_eq!(action(&agent_link(&repo, None)), Some(Action::Agent { worktree: repo, session: None }));
+    }
+
+    #[test]
+    fn reclaim_and_diskmap_links() {
+        let repo = p("/Users/ana/code/rama ñ");
+        let l = reclaim_link(&repo);
+        assert!(l.to_url().starts_with("otherwise://rama/reclaim?path="));
+        assert_eq!(action(&Link::parse(&l.to_url()).unwrap()), Some(Action::Reclaim(repo.clone())));
+        assert_eq!(action(&Link::parse("otherwise://rama/reclaim?path=rel").unwrap()), Some(Action::Focus));
+        let d = diskmap_link(&repo);
+        assert!(d.to_url().starts_with("otherwise://diskmap/scan?path="), "{}", d.to_url());
+        let back = Link::parse(&d.to_url()).unwrap();
+        assert_eq!(back.app, "diskmap");
+        assert_eq!(back.get("path").map(PathBuf::from), Some(repo.clone()));
+        assert_eq!(action(&back), None);
+    }
+
+    #[test]
+    fn reclaim_reaches_today_above_ten_gigabytes() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-21T12:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let repo = p("/w/rama");
+        assert!(reclaim_event(&repo, repo::reclaim::TODAY_THRESHOLD, now).is_none());
+        let e = reclaim_event(&repo, 23 * 1024 * 1024 * 1024, now).unwrap();
+        assert_eq!(e.id, format!("reclaim-{}", slug(&repo.to_string_lossy())));
+        assert!(e.title.contains("rama") && e.title.contains("23"), "{}", e.title);
+        assert!(!e.title.contains("/w/"), "only the folder name goes out: {}", e.title);
+        assert_eq!(e.expires.as_deref(), Some("2026-11-22T12:00:00Z"));
+        assert_eq!(action(&Link::parse(e.link.as_deref().unwrap()).unwrap()), Some(Action::Reclaim(repo)));
     }
 
     #[test]

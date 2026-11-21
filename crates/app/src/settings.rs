@@ -33,6 +33,10 @@ pub struct Settings {
     pub agent_today: Option<String>,
     /// `"off"`: don't fetch the repo's star count from api.github.com.
     pub github_stars: Option<String>,
+    /// Days without changes after which a worktree's build folders are offered for cleanup.
+    pub stale_days: Option<String>,
+    /// `"off"`: no Today entry when a repository could free a lot of space.
+    pub disk_today: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,11 +105,13 @@ impl Settings {
             agent_notify: st("agent_notify"),
             agent_today: st("agent_today"),
             github_stars: st("github_stars"),
+            stale_days: st("stale_days"),
+            disk_today: st("disk_today"),
         }
     }
 
     fn to_json(&self) -> String {
-        let strings = [("language", &self.language), ("branch_sort", &self.branch_sort), ("default_branch", &self.default_branch), ("worktree_base", &self.worktree_base), ("terminal", &self.terminal), ("map_mode", &self.map_mode), ("map_layout", &self.map_layout), ("agent_badges", &self.agent_badges), ("reduce_motion", &self.reduce_motion), ("agent_notify", &self.agent_notify), ("agent_today", &self.agent_today), ("github_stars", &self.github_stars)];
+        let strings = [("language", &self.language), ("branch_sort", &self.branch_sort), ("default_branch", &self.default_branch), ("worktree_base", &self.worktree_base), ("terminal", &self.terminal), ("map_mode", &self.map_mode), ("map_layout", &self.map_layout), ("agent_badges", &self.agent_badges), ("reduce_motion", &self.reduce_motion), ("agent_notify", &self.agent_notify), ("agent_today", &self.agent_today), ("github_stars", &self.github_stars), ("stale_days", &self.stale_days), ("disk_today", &self.disk_today)];
         let lists = [("protected", &self.protected), ("agents", &self.agents), ("launch_ok", &self.launch_ok)];
         let mut fields: Vec<String> = strings.iter().filter_map(|(k, v)| v.as_ref().map(|v| format!("  \"{k}\": {}", quote(v)))).collect();
         fields.extend(lists.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| format!("  \"{k}\": [{}]", v.iter().map(|x| quote(x)).collect::<Vec<_>>().join(", "))));
@@ -130,6 +136,14 @@ impl Settings {
 
     pub fn agent_today(&self) -> bool {
         self.agent_today.as_deref() != Some("off")
+    }
+
+    pub fn stale_days(&self) -> u32 {
+        self.stale_days.as_deref().and_then(|d| d.trim().parse().ok()).filter(|d| *d > 0).unwrap_or(repo::reclaim::DEFAULT_STALE_DAYS)
+    }
+
+    pub fn disk_today(&self) -> bool {
+        self.disk_today.as_deref() != Some("off")
     }
 
     pub fn github_stars(&self) -> bool {
@@ -314,11 +328,16 @@ mod tests {
             agent_notify: Some("on".into()),
             agent_today: Some("off".into()),
             github_stars: Some("off".into()),
+            stale_days: Some("30".into()),
+            disk_today: Some("off".into()),
         };
         assert_eq!(Settings::parse(&s.to_json()), s);
         assert!(!s.github_stars() && Settings::default().github_stars());
         assert!(!s.agent_today() && Settings::default().agent_today());
         assert!(s.side_recent());
+        assert_eq!((s.stale_days(), Settings::default().stale_days()), (30, repo::reclaim::DEFAULT_STALE_DAYS));
+        assert!(!s.disk_today() && Settings::default().disk_today());
+        assert_eq!(Settings { stale_days: Some("0".into()), ..Default::default() }.stale_days(), repo::reclaim::DEFAULT_STALE_DAYS);
         assert!(!s.agent_badges() && s.reduce_motion());
         assert!(Settings::default().agent_badges() && !Settings::default().reduce_motion());
         assert_eq!(Settings::parse(&Settings::default().to_json()), Settings::default());

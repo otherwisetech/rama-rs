@@ -9,7 +9,8 @@ crates/graph  rama-graph: topo_order + layout → Rows (lane, colour, up/down ed
 crates/repo   rama-repo: Repo::discover / history / changes / diff over gitoxide; status, stage,
               commit, stash, branches, fetch/pull/push via the git CLI (work.rs, git.rs);
               worktrees, base branches, disk usage (worktree.rs); merged / gone / squash
-              detection for cleanup (cleanup.rs). No UI.
+              detection for cleanup (cleanup.rs); disk reclaim (reclaim.rs: pure `plan` over
+              sizes + `Repo::reclaim`, cargo target-dir detection). No UI.
 crates/i18n   rama-i18n: embedded translation catalogs, t!/tn!/tv! macros, i18n guard tests
 crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: worktree map;
               cleanup.rs: branch cleanup dialog; launch.rs: external terminals and agent CLIs;
@@ -19,7 +20,8 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
               transcript.rs: session log → conversation items; convo_view.rs: Conversation tab;
               otherwise.rs: otherwise-link (links in, About's other apps, Today feed of agents
               that need you); storage.rs: `<data root>/rama/` + one-time migration from the
-              old config folder; vcity.rs: Vcity invitation (About, Help)
+              old config folder; vcity.rs: Vcity invitation (About, Help); reclaim.rs:
+              "Free up space…" dialog, Today entry > 10 GB, Open in diskmap
 ```
 
 ## Rules
@@ -36,6 +38,17 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
   number of branches). `git gc --prune=now` asks first. Background reads include
   `git worktree list`, `for-each-ref`, `status --no-optional-locks` per worktree, `log -p | patch-id`
   for squash detection and a file walk for sizes; nothing there writes.
+- **Free up space** (`repo/src/reclaim.rs`): the plan is pure and deterministic (kind, then path)
+  and never includes a worktree with changes / unreadable status / partial size, a locked one,
+  the open one, a protected branch's, or a path outside its worktree (or outside the shared
+  cargo folder). Merged = every commit on the default branch's remote-tracking ref and on its
+  upstream. `Repo::reclaim` re-checks before each item (still clean, still merged, real dir not
+  a symlink, build-folder name, inside the owner after canonicalising, not tracked by git) and
+  removes worktrees with plain `git worktree remove`, branches with `git branch -d`. Build
+  folders (`target/`, `node_modules/`, `.next/`, `incremental/`) are the only thing deleted
+  outright instead of moved to the Trash: they're regenerable and the dialog says so. A shared
+  cargo folder goes whole only if it carries `CACHEDIR.TAG` and neither its users nor the folder
+  itself changed for the configured days. Tests never touch real folders or the Trash.
 - **Writes go through the `git` CLI** (`crates/repo/src/git.rs`), never gitoxide, so hooks,
   `core.hooksPath`, signing, LFS and credential helpers behave as in a terminal. Every git
   subprocess gets the login-shell environment from `shell_env` (GUI apps lack the shell PATH).
@@ -59,7 +72,10 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
 - The Today feed (`otherwise.rs`) carries only agent kind, worktree folder and state, comes from
   the badge poll (no extra polling), expires 30 min after the last poll and is cleared on quit.
   otherwise-link is pinned by git tag; it must only add its own crates to Cargo.lock. Tests use
-  temp dirs (`Root::at`, explicit `Locations`).
+  temp dirs (`Root::at`, explicit `Locations`). The reclaim entry (repo folder name + size,
+  over 10 GB) is republished when its title or expiry day changes, expires after a day, and is
+  cleared on quit.
+  `<data root>/rama/worktrees.txt` (worktree paths rama listed) is read by diskmap.
 - External terminals get the exact command line shown before its first run (remembered per
   terminal + command in settings); commands run through the login shell (`$SHELL -lc`).
 - Comments: sparse, only non-obvious why.

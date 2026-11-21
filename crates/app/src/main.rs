@@ -13,6 +13,7 @@ mod launch;
 mod map;
 mod map_view;
 mod otherwise;
+mod reclaim;
 mod robot;
 mod settings;
 mod star;
@@ -187,6 +188,7 @@ fn handle_link(a: otherwise::Action, cx: &mut App) {
         otherwise::Action::Focus => None,
         otherwise::Action::Repo(p) => Some(p.clone()),
         otherwise::Action::Agent { worktree, .. } => Some(worktree.clone()),
+        otherwise::Action::Reclaim(p) => Some(p.clone()),
     };
     let windows = views(cx);
     let hit = match &target {
@@ -198,14 +200,17 @@ fn handle_link(a: otherwise::Action, cx: &mut App) {
         Some((h, view)) => {
             h.update(cx, |_, window, cx| {
                 window.activate_window();
-                if let otherwise::Action::Agent { worktree, session } = a {
-                    view.update(cx, |this, cx| this.request_convo(worktree, session, cx));
+                match a {
+                    otherwise::Action::Agent { worktree, session } => view.update(cx, |this, cx| this.request_convo(worktree, session, cx)),
+                    otherwise::Action::Reclaim(_) => view.update(cx, |this, cx| this.request_reclaim(cx)),
+                    _ => {}
                 }
             })
             .ok();
         }
         None => match a {
-            otherwise::Action::Agent { worktree, session } => open_window_with(Some(worktree.clone()), Some((worktree, session)), cx),
+            otherwise::Action::Agent { worktree, session } => open_window_with(Some(worktree.clone()), Some(Then::Convo(worktree, session)), cx),
+            otherwise::Action::Reclaim(p) => open_window_with(Some(p), Some(Then::Reclaim), cx),
             _ => open_window(target, cx),
         },
     }
@@ -216,8 +221,14 @@ pub(crate) fn open_window(path: Option<PathBuf>, cx: &mut App) {
     open_window_with(path, None, cx);
 }
 
-/// …and then the conversation of the agent in `convo`'s worktree.
-fn open_window_with(path: Option<PathBuf>, convo: Option<(PathBuf, Option<String>)>, cx: &mut App) {
+/// What a new window opens once its repository is loaded.
+enum Then {
+    /// The conversation of the agent in this worktree.
+    Convo(PathBuf, Option<String>),
+    Reclaim,
+}
+
+fn open_window_with(path: Option<PathBuf>, then: Option<Then>, cx: &mut App) {
     let window_options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(1440.), px(900.)), cx)),
         titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..Default::default() }),
@@ -227,8 +238,10 @@ fn open_window_with(path: Option<PathBuf>, convo: Option<(PathBuf, Option<String
         cx.open_window(window_options, |window, cx| {
             let view = cx.new(|cx| {
                 let mut this = app::RamaApp::new(path, window, cx);
-                if let Some((worktree, session)) = convo {
-                    this.request_convo(worktree, session, cx);
+                match then {
+                    Some(Then::Convo(worktree, session)) => this.request_convo(worktree, session, cx),
+                    Some(Then::Reclaim) => this.request_reclaim(cx),
+                    None => {}
                 }
                 this
             });
