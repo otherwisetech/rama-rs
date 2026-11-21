@@ -52,10 +52,17 @@ fn commit(dir: &Path, file: &str, body: &str, msg: &str) {
     git(dir, &["commit", "-q", "-m", msg]);
 }
 
+fn canon(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
 fn tmp() -> (tempfile::TempDir, PathBuf) {
     setup();
     let d = tempfile::tempdir().unwrap();
     let p = std::fs::canonicalize(d.path()).unwrap();
+    // git can't create folders under Windows' `\\?\` paths
+    #[cfg(windows)]
+    let p = PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\").to_string());
     (d, p)
 }
 
@@ -319,8 +326,8 @@ fn real_plan(r: &Repo, stale_days: u32) -> Vec<Suggestion> {
 fn merged_worktrees_are_found_and_removed_safely() {
     let (_d, p, r) = repo_with_worktrees();
     let plan = real_plan(&r, 100_000);
-    let merged: Vec<&Path> = plan.iter().filter(|s| s.kind == ReclaimKind::MergedWorktree).map(|s| s.owner.as_path()).collect();
-    assert_eq!(merged, [p.join("done")]);
+    let merged: Vec<PathBuf> = plan.iter().filter(|s| s.kind == ReclaimKind::MergedWorktree).map(|s| canon(&s.owner)).collect();
+    assert_eq!(merged, [canon(&p.join("done"))]);
     assert!(plan.iter().all(|s| !s.owner.ends_with("dirty")));
     // wip has its own commit: only its incremental caches (not stale with 100 000 days)
     let wip: Vec<ReclaimKind> = plan.iter().filter(|s| s.owner.ends_with("wip")).map(|s| s.kind).collect();
@@ -331,7 +338,7 @@ fn merged_worktrees_are_found_and_removed_safely() {
     commit(&done, "late.txt", "late\n", "late");
     let rep = r.reclaim(&plan, "refs/heads/main", true, &Cancel::default(), &mut |_, _| {}).unwrap();
     assert!(done.exists());
-    assert!(rep.skipped.contains(&(done.clone(), Skip::NotMerged)), "{rep:?}");
+    assert!(rep.skipped.iter().any(|(x, s)| x.ends_with("done") && *s == Skip::NotMerged), "{rep:?}");
     // the incremental caches went, sources stayed
     assert!(!p.join("wip/target/debug/incremental").exists() && p.join("wip/target/debug/deps").exists());
     assert!(p.join("wip/wip.txt").exists());
@@ -341,7 +348,8 @@ fn merged_worktrees_are_found_and_removed_safely() {
     let plan = real_plan(&r, 100_000);
     let only: Vec<Suggestion> = plan.into_iter().filter(|s| s.kind == ReclaimKind::MergedWorktree).collect();
     let rep = r.reclaim(&only, "refs/heads/main", true, &Cancel::default(), &mut |_, _| {}).unwrap();
-    assert_eq!(rep.done, vec![done.clone()]);
+    assert_eq!(rep.done.len(), 1);
+    assert!(rep.done[0].ends_with("done"), "{rep:?}");
     assert_eq!(rep.branches_deleted, ["done"]);
     assert!(!done.exists());
     assert!(rep.freed > 0);
@@ -377,6 +385,6 @@ fn tracked_build_folders_are_kept() {
     let plan = real_plan(&r, 14);
     let rep = r.reclaim(&plan, "refs/heads/main", false, &Cancel::default(), &mut |_, _| {}).unwrap();
     assert!(wip.join("node_modules/a/index.js").exists());
-    assert!(rep.skipped.contains(&(wip.join("node_modules"), Skip::Tracked)), "{rep:?}");
+    assert!(rep.skipped.iter().any(|(x, s)| x.ends_with("node_modules") && *s == Skip::Tracked), "{rep:?}");
     assert!(!wip.join("target").exists());
 }
