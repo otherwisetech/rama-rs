@@ -152,6 +152,34 @@ project's star count (`api.github.com/repos/otherwisetech/rama-rs`, no login, no
 your repositories) at most once a day, shown next to *Star on GitHub*. Turn it off in the globe
 menu (*Show GitHub star count*).
 
+## Works with other Otherwise apps
+
+rama uses [otherwise-link](https://github.com/otherwisetech/otherwise-link), the small layer
+Otherwise Technologies' apps share. Everything stays on your computer.
+
+- **Links.** rama opens `otherwise-rama://` links (also `otherwise://rama/…` through
+  [Otherwise Apps](https://github.com/otherwisetech/otherwise-apps)); paths are absolute and
+  percent-encoded:
+
+  | Link | Does |
+  |------|------|
+  | `otherwise://rama` | brings rama to the front |
+  | `otherwise://rama/repo?path=/Users/me/code/app` | shows that repository (the window that has it, else a new one) |
+  | `otherwise://rama/agent?worktree=/Users/me/code/app-wt&session=<id>` | opens the worktree map and that agent's Conversation tab |
+
+  macOS registers the scheme from the app's `Info.plist`; Windows registers it for your user
+  (`HKCU\Software\Classes\otherwise-rama`) when rama starts; on Linux `rama.desktop` declares
+  `x-scheme-handler/otherwise-rama` and rama makes itself the handler when that file is in
+  `~/.local/share/applications`.
+- **Today.** Agents that wait for you (a question or a permission prompt, the raised hand) or lost
+  their connection show up in Otherwise Apps' *Today* view, linking to their conversation. Only
+  the agent's name, the worktree's folder and what it waits for are written
+  (`today/rama.json` in the shared Otherwise folder), never titles or conversation text. The
+  list comes from the same poll as the badges, so it is only refreshed while rama is on screen;
+  entries expire 30 minutes after the last poll and are removed when rama quits. Turn it off in
+  the worktree map's settings.
+- **About** lists the other Otherwise apps installed on this computer; click one to open it.
+
 ## Build and run
 
 ```sh

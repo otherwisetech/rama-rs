@@ -186,3 +186,5 @@ app.confirm.remote_type = Type {branch} to confirm:
 app.confirm.remote_ok = Delete remote branch
 app.prompt.rename_title = Rename {name}
 app.prompt.rename_ok = Rename
+app.about.more_apps = More Otherwise apps on this computer
+app.link.agent_gone = That agent isn’t running in this repository anymore.

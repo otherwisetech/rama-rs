@@ -36,6 +36,15 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- otherwise-rama:// links (otherwise-link: register::macos_url_types) -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>io.github.otherwisetech.rama</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>CFBundleURLSchemes</key><array><string>otherwise-rama</string></array>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST

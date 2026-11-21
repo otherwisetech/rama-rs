@@ -186,3 +186,5 @@ app.confirm.remote_type = Tapez {branch} pour confirmer :
 app.confirm.remote_ok = Supprimer la branche distante
 app.prompt.rename_title = Renommer {name}
 app.prompt.rename_ok = Renommer
+app.about.more_apps = Autres apps Otherwise sur cet ordinateur
+app.link.agent_gone = Cet agent ne travaille plus dans ce dépôt.

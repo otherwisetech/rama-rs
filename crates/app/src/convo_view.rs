@@ -11,6 +11,9 @@ use gpui::*;
 use gpui_component::{IconName, Sizable as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use std::cell::RefCell;
+
+/// How long a link waits for its agent to show up in the poll.
+const PENDING_FOR: std::time::Duration = std::time::Duration::from_secs(60);
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -72,6 +75,44 @@ impl RamaApp {
         self.convo = Some(Convo { worktree, file, kind: agent.kind, title: agent.title.clone(), items: Rc::new(Vec::new()), shown: Rc::new(Vec::new()), list, expanded: Rc::new(RefCell::new(HashSet::new())), window: transcript::WINDOW, from: 0, len: 0, loading: false, failed: false, search, query: String::new(), _sub: sub });
         self.load_convo(false, cx);
         cx.notify();
+    }
+
+    /// A link asked for the conversation of the agent in `worktree`: show the map and open it
+    /// as soon as the agent poll finds that agent.
+    pub fn request_convo(&mut self, worktree: PathBuf, session: Option<String>, cx: &mut Context<Self>) {
+        self.pending_convo = Some((worktree, session, std::time::Instant::now()));
+        if matches!(self.phase, crate::app::Phase::Ready) {
+            self.show_map(true, cx);
+        } else {
+            self.map_view = true;
+        }
+        cx.notify();
+    }
+
+    pub fn try_pending_convo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((wt, session, at)) = self.pending_convo.clone() else { return };
+        if at.elapsed() > PENDING_FOR {
+            self.pending_convo = None;
+            self.toast(i18n::t!("app.link.agent_gone"), cx);
+            return;
+        }
+        if !matches!(self.phase, crate::app::Phase::Ready) {
+            return;
+        }
+        let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let want = canon(&wt);
+        let hit = self
+            .agents
+            .found
+            .iter()
+            .filter(|(w, _)| canon(w) == want)
+            .flat_map(|(w, v)| v.iter().map(move |a| (w.clone(), a.clone())))
+            .find(|(_, a)| a.session_file.is_some() && session.as_ref().is_none_or(|s| a.session_id.as_deref() == Some(s.as_str())));
+        if let Some((w, a)) = hit {
+            self.pending_convo = None;
+            self.map.selected = Some(w.clone());
+            self.open_convo(w, a, window, cx);
+        }
     }
 
     pub fn close_convo(&mut self, cx: &mut Context<Self>) {

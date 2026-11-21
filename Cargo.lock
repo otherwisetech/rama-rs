@@ -1821,6 +1821,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fallible-iterator"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
+name = "fallible-streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
+
+[[package]]
 name = "fancy-regex"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3690,6 +3702,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashlink"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
+dependencies = [
+ "hashbrown 0.15.5",
+]
+
+[[package]]
 name = "hdrhistogram"
 version = "7.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4527,6 +4548,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d0a00925a9f930d679b6789b721e3a7f9ed110f41b86d2497caa780c3a070a"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "libsqlite3-sys"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "133c182a6a2c87864fe97778797e46c7e999672690dc9fa3ee8e241aa4a9c13f"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -5568,6 +5600,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "otherwise-link"
+version = "0.1.0"
+source = "git+https://github.com/otherwisetech/otherwise-link?tag=v0.1.0#0b2969806dcac2adc79c9f21f6bd72a98d8e0be2"
+dependencies = [
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6110,9 +6154,10 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rama-app"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
@@ -6120,26 +6165,28 @@ dependencies = [
  "libc",
  "notify",
  "objc",
+ "otherwise-link",
  "rama-graph",
  "rama-i18n",
  "rama-repo",
  "serde_json",
  "sysinfo",
+ "tempfile",
  "ureq",
  "winresource",
 ]
 
 [[package]]
 name = "rama-graph"
-version = "0.2.4"
+version = "0.3.0"
 
 [[package]]
 name = "rama-i18n"
-version = "0.2.4"
+version = "0.3.0"
 
 [[package]]
 name = "rama-repo"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "gix",
  "libc",
@@ -6533,6 +6580,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "rusqlite"
+version = "0.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "165ca6e57b20e1351573e3729b958bc62f0e48025386970b6e4d29e7a7e71f3f"
+dependencies = [
+ "bitflags 2.13.1",
+ "fallible-iterator",
+ "fallible-streaming-iterator",
+ "hashlink",
+ "libsqlite3-sys",
+ "smallvec",
 ]
 
 [[package]]
@@ -8389,6 +8450,12 @@ dependencies = [
  "sval_ref",
  "sval_serde",
 ]
+
+[[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version_check"

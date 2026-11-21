@@ -22,6 +22,8 @@ pub struct AgentBadges {
     pub reduce_motion: bool,
     /// A system notification when an agent starts needing you (macOS).
     pub notify: bool,
+    /// Agents that need you go to Otherwise Apps' Today.
+    pub today: bool,
     /// Agents per worktree path (as git lists it).
     pub found: Rc<Found>,
     /// Checked-out branch → its worktree, for worktrees with agents.
@@ -43,6 +45,7 @@ impl Default for AgentBadges {
             enabled: s.agent_badges(),
             reduce_motion: s.reduce_motion(),
             notify: s.agent_notify(),
+            today: s.agent_today(),
             found: Rc::new(Found::new()),
             branches: Rc::new(HashMap::new()),
             current: None,
@@ -63,6 +66,11 @@ impl AgentBadges {
 
     fn any_animated(&self) -> bool {
         self.found.values().flatten().any(|a| crate::robot::animated(a.state))
+    }
+
+    /// Worktrees as git last listed them.
+    pub fn listed(&self) -> Vec<PathBuf> {
+        self.worktrees.as_ref().map(|(_, w)| w.iter().map(|w| w.path.clone()).collect()).unwrap_or_default()
     }
 
     pub fn clear(&mut self) {
@@ -114,6 +122,11 @@ impl RamaApp {
     }
 
     fn poll_agents(&mut self, cx: &mut Context<Self>) {
+        if !self.agents.enabled || !self.agents.today {
+            if let Some(r) = &self.repo {
+                crate::otherwise::forget_repo(&r.root());
+            }
+        }
         if !self.agents.enabled {
             if !self.agents.found.is_empty() {
                 self.agents.clear();
@@ -129,6 +142,7 @@ impl RamaApp {
         self.agents.scanning = true;
         let cached_list = self.agents.worktrees.as_ref().filter(|(at, _)| at.elapsed() < WORKTREES_FRESH).map(|(_, w)| w.as_ref().clone());
         let root = repo.root();
+        let feed_root = root.clone();
         let task = cx.background_executor().spawn(async move {
             let fresh = cached_list.is_none();
             let wts = match cached_list {
@@ -164,6 +178,9 @@ impl RamaApp {
                 let changed = *a.found != found || a.current != current;
                 a.found = Rc::new(found);
                 a.current = current;
+                if a.today {
+                    crate::otherwise::set_repo_events(&feed_root, crate::otherwise::agent_events(&a.found, chrono::Utc::now()));
+                }
                 if changed {
                     cx.notify();
                 }

@@ -16,7 +16,9 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
               agents.rs: AI agents at work per worktree (processes via sysinfo, Claude session
               files; pure `scan` / `classify` / `Tracker`, tested with fakes); agents_view.rs:
               poll, animation, badge, panel rows, legend; robot.rs: the pixel sprites;
-              transcript.rs: session log → conversation items; convo_view.rs: Conversation tab
+              transcript.rs: session log → conversation items; convo_view.rs: Conversation tab;
+              otherwise.rs: otherwise-link (links in, About's other apps, Today feed of agents
+              that need you)
 ```
 
 ## Rules
@@ -53,6 +55,10 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
   never written, sent, cached on disk or logged. Polling happens only while the window is on
   screen and the graph or map shows; the 6 fps redraw only while an agent works or waves and
   motion isn't reduced.
+- The Today feed (`otherwise.rs`) carries only agent kind, worktree folder and state, comes from
+  the badge poll (no extra polling), expires 30 min after the last poll and is cleared on quit.
+  otherwise-link is pinned by git tag; it must only add its own crates to Cargo.lock. Tests use
+  temp dirs (`Root::at`, explicit `Locations`).
 - External terminals get the exact command line shown before its first run (remembered per
   terminal + command in settings); commands run through the login shell (`$SHELL -lc`).
 - Comments: sparse, only non-obvious why.

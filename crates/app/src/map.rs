@@ -58,6 +58,7 @@ pub struct SettingsForm {
     pub badges: bool,
     pub reduce_motion: bool,
     pub notify: bool,
+    pub today: bool,
 }
 
 pub enum Dialog {
@@ -525,7 +526,7 @@ impl RamaApp {
         let protected = mk(s.protected_patterns().join(", "), String::new(), window, cx);
         let base_dir = mk(s.worktree_base.clone().unwrap_or_default(), self.main_path().and_then(|m| m.parent().map(|p| p.display().to_string())).unwrap_or_default(), window, cx);
         let agents = mk(agents.replace('\n', ", "), launch::AGENTS.join(", "), window, cx);
-        self.map.dialog = Some(Dialog::Settings(SettingsForm { default_branch, protected, base_dir, agents, terminal: s.terminal.clone(), badges: s.agent_badges(), reduce_motion: s.reduce_motion(), notify: s.agent_notify() }));
+        self.map.dialog = Some(Dialog::Settings(SettingsForm { default_branch, protected, base_dir, agents, terminal: s.terminal.clone(), badges: s.agent_badges(), reduce_motion: s.reduce_motion(), notify: s.agent_notify(), today: s.agent_today() }));
         cx.notify();
     }
 
@@ -545,7 +546,9 @@ impl RamaApp {
             s.agent_badges = (!f.badges).then(|| "off".into()); // i18n-ok: setting value
             s.reduce_motion = f.reduce_motion.then(|| "on".into()); // i18n-ok: setting value
             s.agent_notify = f.notify.then(|| "on".into()); // i18n-ok: setting value
+            s.agent_today = (!f.today).then(|| "off".into()); // i18n-ok: setting value
         });
+        self.agents.today = f.today;
         self.set_agent_prefs(f.badges, f.reduce_motion, f.notify, cx);
         self.reload_map(false, cx);
         cx.notify();

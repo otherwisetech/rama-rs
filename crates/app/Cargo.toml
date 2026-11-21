@@ -22,10 +22,15 @@ serde_json = "1"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # already in Cargo.lock through gpui; only process listing is used
 sysinfo = { version = "0.31", default-features = false, features = ["system"] }
+otherwise-link.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component.workspace = true
 gpui-component-assets.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
 
 # build.rs embeds the .exe icon; only pulled in when building on Windows
 [target.'cfg(windows)'.build-dependencies]
