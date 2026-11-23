@@ -3,6 +3,7 @@
 use crate::app::RamaApp;
 use gpui::*;
 use gpui_component::input::{InputState, TextareaState};
+use repo::swap::{Ledger, Moved, SwapError, SwapPreview, Target};
 use repo::{Cancel, FileChange, Oid, Repo, Run, Stash, WorkFile, WorkStatus};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -52,7 +53,20 @@ pub enum Op {
     RestoreBranch { name: String, oid: Oid },
     /// The branches (and worktrees) chosen in the cleanup dialog.
     Cleanup(Arc<crate::cleanup::Plan>),
+    /// Check out another branch in `dir`, uncommitted changes carried in a tagged stash.
+    ChangeBranch { dir: PathBuf, target: Target, id: String, out: SwapSlot },
+    /// Swap the branches of two checkouts, each branch taking its changes along.
+    Swap { a: PathBuf, b: PathBuf, id: String, ledger: Ledger, out: SwapSlot },
 }
+
+/// What a change of branch or a swap ended with, for the follow-up on the UI thread.
+#[derive(Debug)]
+pub struct SwapOutcome {
+    pub preview: Option<SwapPreview>,
+    pub result: Result<Moved, SwapError>,
+}
+
+pub type SwapSlot = Arc<Mutex<Option<SwapOutcome>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitKind {
@@ -93,12 +107,14 @@ impl Op {
             Op::RemoveWorktree { path, force, .. } => format!("git worktree remove{} {}", if *force { " --force" } else { "" }, path.display()), // i18n-ok
             Op::RestoreBranch { name, oid } => format!("git branch {name} {}", oid.to_hex_with_len(10)), // i18n-ok
             Op::Cleanup(p) => format!("git branch -d/-D ({})", p.items.len()), // i18n-ok
+            Op::ChangeBranch { dir, target: Target::Local(b) | Target::Remote(b), .. } => i18n::t!("app.swap.cmd_change", path = dir.display(), branch = b),
+            Op::Swap { a, b, .. } => i18n::t!("app.swap.cmd_swap", a = a.display(), b = b.display()),
         }
     }
 
     /// Network and hook-running ops stream their output while they run.
     fn streams(&self) -> bool {
-        matches!(self, Op::Commit { .. } | Op::Fetch | Op::Pull | Op::PullFf { .. } | Op::Push(_) | Op::DeleteRemote(_) | Op::Git { .. } | Op::RemoveWorktree { .. } | Op::Cleanup(_))
+        matches!(self, Op::Commit { .. } | Op::Fetch | Op::Pull | Op::PullFf { .. } | Op::Push(_) | Op::DeleteRemote(_) | Op::Git { .. } | Op::RemoveWorktree { .. } | Op::Cleanup(_) | Op::ChangeBranch { .. } | Op::Swap { .. })
     }
 
     /// Ops that leave history and refs alone only need a status refresh.
@@ -282,7 +298,26 @@ fn execute(repo: &Repo, op: &Op, cancel: &Cancel, log: &Arc<Mutex<Vec<String>>>)
         }
         Op::RestoreBranch { name, oid } => repo.restore_branch(name, *oid),
         Op::Cleanup(plan) => crate::cleanup::execute(repo, plan, cancel, log, &mut sink),
+        Op::ChangeBranch { dir, target, id, out } => {
+            let result = repo::swap::change_branch(dir, target, id, &mut |l| push_log(log, l, false));
+            Ok(swap_run(out, None, result))
+        }
+        Op::Swap { a, b, id, ledger, out } => {
+            let preview = repo::swap::preview_swap(a, b, ledger).ok();
+            let result = repo::swap::swap(a, b, id, ledger, &mut |l| push_log(log, l, false)).map(|(_, m)| m);
+            Ok(swap_run(out, preview, result))
+        }
     }
+}
+
+fn swap_run(out: &SwapSlot, preview: Option<SwapPreview>, result: Result<Moved, SwapError>) -> Run {
+    let output = match &result {
+        Ok(m) => m.hook_warnings.iter().map(|h| i18n::t!("app.swap.hook_after", hook = h)).collect::<Vec<_>>().join("\n"),
+        Err(e) => e.to_string(),
+    };
+    let run = Run { success: result.is_ok(), output, ..Default::default() };
+    *out.lock().unwrap() = Some(SwapOutcome { preview, result });
+    run
 }
 
 /// Paths inside `.git` that mean refs or HEAD moved (history must reload); other `.git` churn
@@ -494,7 +529,13 @@ impl RamaApp {
                 (false, false, None, e)
             }
         };
-        if ok {
+        let swap_op = matches!(op, Op::ChangeBranch { .. } | Op::Swap { .. });
+        if swap_op {
+            // its own dialog explains a failure (rolled back, conflict, stash kept)
+            if !ok {
+                self.work.output_open = true;
+            }
+        } else if ok {
             match &op {
                 Op::Commit { .. } => {
                     // set_value needs the window; the next render clears the box

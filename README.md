@@ -57,6 +57,13 @@ Linux. UI in Spanish, English, Portuguese and French.
   their own card, hard links once) and cached; cargo target folders kept outside the repository
   (`CARGO_TARGET_DIR` in your login shell, or `build.target-dir` in a `.cargo/config.toml`) are
   measured too and shown in the repository's totals.
+- **Change branch / swap**: click the branch pill in the top bar, or *Change branch…* on any card,
+  to switch that checkout to a local or remote branch (remote ones become tracking branches).
+  *Swap with main checkout* on a worktree gives the main checkout its branch and the worktree the
+  main checkout's, so you can try the work where your dev server, IDE and env files live; run it
+  again to swap back. Uncommitted changes travel with their branch (tagged stashes applied by SHA,
+  untracked files included, ignored files stay put); a conflict stops and keeps the stash. Both
+  cards and the top bar say "⇄ swapped with …" until you swap back, even after a restart.
 - **Free up space…** (map toolbar, totals panel, a worktree's panel) offers, with every path and
   size listed before anything happens: worktrees whose branch is merged into the default branch
   with nothing uncommitted or unpushed (`git worktree remove`, optionally `git branch -d`);

@@ -134,6 +134,11 @@ impl RamaApp {
         if self.is_current(e) {
             f.push((i18n::t!("app.map.flag_current"), t.accent));
         }
+        if self.swap_running(&e.wt.path) {
+            f.push((i18n::t!("app.swap.flag_running"), t.accent));
+        } else if let Some(with) = self.swapped_with(&e.wt.path) {
+            f.push((i18n::t!("app.swap.flag_swapped", name = self.checkout_name(&with)), t.tag));
+        }
         if e.wt.locked.is_some() {
             f.push((i18n::t!("app.map.flag_locked"), t.tag));
         }
@@ -258,6 +263,9 @@ impl RamaApp {
         let viewport = self.map.viewport.clone();
         let p2 = pos.clone();
         let edge_colors = colors.clone();
+        // the edge(s) between the two checkouts being swapped pulse while it runs
+        let pulse: Vec<Option<f32>> = list.iter().map(|e| self.swap_motion(&e.wt.path).0).collect();
+        let accent = t.accent;
         let edges = canvas(
             move |b, _, _| viewport.set(b),
             move |b, _, window, _| {
@@ -272,6 +280,15 @@ impl RamaApp {
                     pb.cubic_bezier_to(to, point(from.x, mid_y), point(to.x, mid_y));
                     if let Ok(path) = pb.build() {
                         window.paint_path(path, if dim[i] { edge_colors[i].opacity(0.3) } else { edge_colors[i] });
+                    }
+                    if let Some(k) = pulse[i] {
+                        let mut pb = PathBuilder::stroke(px(((2.5 + 4. * k) * zoom).max(1.5)));
+                        pb.move_to(from);
+                        let mid_y = (from.y + to.y) / 2.;
+                        pb.cubic_bezier_to(to, point(from.x, mid_y), point(to.x, mid_y));
+                        if let Ok(path) = pb.build() {
+                            window.paint_path(path, accent.opacity(0.25 + 0.6 * k));
+                        }
                     }
                 }
             },
@@ -383,7 +400,15 @@ impl RamaApp {
                 .children(self.agent_badge(t, &e.wt.path, 2. * zoom, ("map-card-agent", i), cx))
                 .when(e.wt.main, |d| d.child(div().flex_none().text_size(z(10.)).text_color(t.accent).child(i18n::t!("app.map.main")))),
         );
-        card = card.child(line(Self::head_label(e), t.ink, 12.));
+        // after a swap the branch label slides in from where the partner card's label was
+        card = card.child(match self.swap_motion(&e.wt.path) {
+            (_, Some(k)) => {
+                let ease = 1. - (1. - k).powi(3);
+                div().relative().top(z(10. * (1. - ease))).opacity(0.25 + 0.75 * ease).child(line(Self::head_label(e), t.accent, 12.))
+            }
+            (Some(_), None) => div().flex().items_center().gap(z(5.)).child(Spinner::new().xsmall().color(t.accent)).child(line(Self::head_label(e), t.ink, 12.)),
+            _ => div().child(line(Self::head_label(e), t.ink, 12.)),
+        });
         if zoom >= 0.55 {
             let mut dist = Vec::new();
             if let Some(up) = &e.info.upstream {
@@ -525,6 +550,16 @@ impl RamaApp {
             missing: e.wt.prunable.is_some(),
             agents: agents.to_vec(),
             busy: self.work.job.is_some(),
+            on_branch: e.wt.branch.is_some(),
+            swapped_with: self.swapped_with(&e.wt.path).map(|p| {
+                let n = self.checkout_name(&p);
+                (p, n)
+            }),
+            others: if e.wt.main {
+                self.map.list().map(|l| l.iter().skip(1).filter(|o| o.wt.prunable.is_none() && o.wt.branch.is_some()).map(|o| (o.wt.path.clone(), format!("{} ({})", self.checkout_name(&o.wt.path), o.wt.branch.clone().unwrap_or_default()))).collect()).unwrap_or_default()
+            } else {
+                Vec::new()
+            },
         }
     }
 
@@ -667,6 +702,17 @@ impl RamaApp {
         }
         let p = path.clone();
         actions = actions.child(action("act-term", IconName::SquareTerminal, i18n::t!("app.map.open_terminal"), !missing).when(!missing, |d| d.on_click(cx.listener(move |this, _, _, cx| this.launch(p.clone(), None, cx)))));
+        let p = path.clone();
+        let can_change = !missing && !busy;
+        actions = actions.child(action("act-change-branch", IconName::ArrowRight, i18n::t!("app.swap.menu_change"), can_change).when(can_change, |d| d.on_click(cx.listener(move |this, _, window, cx| this.change_branch_of(p.clone(), window, cx)))));
+        let can_swap = can_change && e.wt.branch.is_some();
+        if let Some(with) = self.swapped_with(&path) {
+            let (p, label) = (path.clone(), i18n::t!("app.swap.menu_back", name = self.checkout_name(&with)));
+            actions = actions.child(action("act-swap", IconName::Replace, label, can_swap).when(can_swap, |d| d.on_click(cx.listener(move |this, _, _, cx| this.ask_swap(with.clone(), p.clone(), cx)))));
+        } else if !e.wt.main {
+            let p = path.clone();
+            actions = actions.child(action("act-swap", IconName::Replace, i18n::t!("app.swap.menu_with_main"), can_swap).when(can_swap, |d| d.on_click(cx.listener(move |this, _, _, cx| this.ask_swap_with_main(&p, cx)))));
+        }
         let agents = self.map.agent_commands();
         let weak = cx.entity().downgrade();
         let p = path.clone();
@@ -929,6 +975,12 @@ struct NodeMenu {
     missing: bool,
     agents: Vec<String>,
     busy: bool,
+    /// On a branch (a detached checkout has nothing to swap).
+    on_branch: bool,
+    /// The checkout this one is swapped with.
+    swapped_with: Option<(PathBuf, String)>,
+    /// Main card: the worktrees it can swap with (path, label).
+    others: Vec<(PathBuf, String)>,
 }
 
 impl NodeMenu {
@@ -946,7 +998,30 @@ impl NodeMenu {
             .item(self.item(i18n::t!("app.map.open_rama"), ok, |this, p, _, cx| this.open_in_new_window(p.to_path_buf(), cx)))
             .item(self.item(i18n::t!("app.map.copy_path"), true, |this, p, _, cx| this.copy_path(p, cx)))
             .separator()
-            .item(self.item(i18n::t!("app.map.open_terminal"), ok, |this, p, _, cx| this.launch(p.to_path_buf(), None, cx)));
+            .item(self.item(i18n::t!("app.map.open_terminal"), ok, |this, p, _, cx| this.launch(p.to_path_buf(), None, cx)))
+            .separator()
+            .item(self.item(i18n::t!("app.swap.menu_change"), ok && !self.busy, |this, p, window, cx| this.change_branch_of(p.to_path_buf(), window, cx)));
+        let can_swap = ok && !self.busy && self.on_branch;
+        if let Some((with, name)) = &self.swapped_with {
+            let (w, p, with) = (self.weak.clone(), self.path.clone(), with.clone());
+            menu = menu.item(PopupMenuItem::new(i18n::t!("app.swap.menu_back", name = name)).disabled(!can_swap).on_click(move |_, _, cx| {
+                w.update(cx, |this, cx| this.ask_swap(with.clone(), p.clone(), cx)).ok();
+            }));
+        } else if !self.main {
+            menu = menu.item(self.item(i18n::t!("app.swap.menu_with_main"), can_swap, |this, p, _, cx| this.ask_swap_with_main(p, cx)));
+        } else if !self.others.is_empty() {
+            let (others, w, p) = (self.others.clone(), self.weak.clone(), self.path.clone());
+            menu = menu.submenu(i18n::t!("app.swap.menu_with_worktree"), window, cx, move |mut m, _, _| {
+                for (o, label) in &others {
+                    let (w, p, o) = (w.clone(), p.clone(), o.clone());
+                    m = m.item(PopupMenuItem::new(label.clone()).disabled(!can_swap).on_click(move |_, _, cx| {
+                        w.update(cx, |this, cx| this.ask_swap(p.clone(), o.clone(), cx)).ok();
+                    }));
+                }
+                m
+            });
+        }
+        menu = menu.separator();
         let (agents, w, p) = (self.agents.clone(), self.weak.clone(), self.path.clone());
         menu = menu.submenu(i18n::t!("app.map.start_agent"), window, cx, move |mut m, _, _| {
             if agents.is_empty() {

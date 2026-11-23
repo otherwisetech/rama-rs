@@ -344,6 +344,7 @@ impl RamaApp {
                 this.map.current = current;
                 let ok = entries.is_ok();
                 this.map.entries = Some(entries.map(Rc::new));
+                this.prune_swaps();
                 if let Some(sel) = this.map.selected.clone()
                     && this.map.entry(&sel).is_none()
                 {
@@ -717,7 +718,8 @@ impl RamaApp {
             _ => {}
         }
         self.cleanup_after_op(op, ok, cx);
-        if matches!(op, Op::Git { .. } | Op::RemoveWorktree { .. } | Op::Cleanup(_) | Op::RestoreBranch { .. } | Op::DeleteBranch(_) | Op::ForceDeleteBranch(_) | Op::Switch(_) | Op::Fetch | Op::Pull) && (self.map_view || self.map.entries.is_some()) {
+        self.after_swap_op(op, cx);
+        if matches!(op, Op::ChangeBranch { .. } | Op::Swap { .. } | Op::SwitchRemote(_) | Op::Git { .. } | Op::RemoveWorktree { .. } | Op::Cleanup(_) | Op::RestoreBranch { .. } | Op::DeleteBranch(_) | Op::ForceDeleteBranch(_) | Op::Switch(_) | Op::Fetch | Op::Pull) && (self.map_view || self.map.entries.is_some()) {
             self.reload_map(false, cx);
         }
     }

@@ -10,7 +10,8 @@ crates/repo   rama-repo: Repo::discover / history / changes / diff over gitoxide
               commit, stash, branches, fetch/pull/push via the git CLI (work.rs, git.rs);
               worktrees, base branches, disk usage (worktree.rs); merged / gone / squash
               detection for cleanup (cleanup.rs); disk reclaim (reclaim.rs: pure `plan` over
-              sizes + `Repo::reclaim`, cargo target-dir detection). No UI.
+              sizes + `Repo::reclaim`, cargo target-dir detection); change branch and swap two
+              checkouts' branches with changes in tagged stashes (swap.rs). No UI.
 crates/i18n   rama-i18n: embedded translation catalogs, t!/tn!/tv! macros, i18n guard tests
 crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: worktree map;
               cleanup.rs: branch cleanup dialog; launch.rs: external terminals and agent CLIs;
@@ -21,7 +22,9 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
               otherwise.rs: otherwise-link (links in, About's other apps, Today feed of agents
               that need you); storage.rs: `<data root>/rama/` + one-time migration from the
               old config folder; vcity.rs: Vcity invitation (About, Help); reclaim.rs:
-              "Free up space…" dialog, Today entry > 10 GB, Open in diskmap
+              "Free up space…" dialog, Today entry > 10 GB, Open in diskmap; branch_picker.rs: the
+              branch switcher (top bar pill, "Change branch…"); swap_ui.rs: change / swap dialogs,
+              swap badges, the map's swap animation
 ```
 
 ## Rules
@@ -38,6 +41,13 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
   number of branches). `git gc --prune=now` asks first. Background reads include
   `git worktree list`, `for-each-ref`, `status --no-optional-locks` per worktree, `log -p | patch-id`
   for squash detection and a file walk for sizes; nothing there writes.
+- **Change branch / swap** (`repo/src/swap.rs`): uncommitted changes travel with their branch in
+  stashes pushed with `--include-untracked` under a unique message `rama-swap:<id>:<branch>`,
+  applied by SHA and dropped only after a clean apply (index looked up again by SHA and tag; the
+  stash stack is shared). Swap order: stash both, `switch --detach` the worktree, switch main,
+  switch the worktree; any failed step undoes the earlier ones. A conflicting apply stops and
+  keeps the stash. Refuses rebase/merge/cherry-pick/revert/bisect in progress, conflicts, dirty
+  submodules, LFS without `git lfs`, detached HEADs (swap). Swaps in effect: `<data root>/rama/swaps.tsv`.
 - **Free up space** (`repo/src/reclaim.rs`): the plan is pure and deterministic (kind, then path)
   and never includes a worktree with changes / unreadable status / partial size, a locked one,
   the open one, a protected branch's, or a path outside its worktree (or outside the shared

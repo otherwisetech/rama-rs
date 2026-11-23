@@ -134,6 +134,8 @@ pub struct RamaApp {
     pub convo: Option<crate::convo_view::Convo>,
     pub convo_tab: bool,
     pub(crate) prompt_sub: Option<Subscription>,
+    pub branch_picker: Option<crate::branch_picker::BranchPicker>,
+    pub swap: crate::swap_ui::SwapUi,
     /// A link asked for this agent's conversation (worktree, session, when); opened once the
     /// agent poll finds it.
     pub(crate) pending_convo: Option<(PathBuf, Option<String>, Instant)>,
@@ -225,6 +227,8 @@ impl RamaApp {
             convo: None,
             convo_tab: false,
             prompt_sub: None,
+            branch_picker: None,
+            swap: crate::swap_ui::SwapUi::default(),
             pending_convo: None,
             other_apps: Vec::new(),
             _subs: subs,
@@ -656,6 +660,9 @@ impl RamaApp {
                     .child(
                         div()
                             .id("branch-pill")
+                            .cursor_pointer()
+                            .hover(|s| s.opacity(0.85))
+                            .on_click(cx.listener(|this, _, window, cx| this.open_branch_picker(window, cx)))
                             .flex()
                             .flex_shrink_1()
                             .min_w(px(64.))
@@ -670,11 +677,17 @@ impl RamaApp {
                             .font_weight(FontWeight::MEDIUM)
                             .child(ui::branch_icon(12., t.accent))
                             .child(div().min_w_0().truncate().child(branch))
+                            .child(div().flex_none().child("▾")) // i18n-ok: symbol
                             .tooltip(move |window, cx| {
                                 let (b, n) = tip.clone();
-                                gpui_component::tooltip::Tooltip::element(move |_, _| div().flex().flex_col().child(b.clone()).child(div().text_color(muted).child(n.clone()))).build(window, cx)
+                                gpui_component::tooltip::Tooltip::element(move |_, _| div().flex().flex_col().child(b.clone()).child(div().text_color(muted).child(n.clone())).child(div().text_color(muted).child(i18n::t!("app.swap.pill_tip")))).build(window, cx)
                             }),
                     );
+                if let Some(with) = self.swapped_with(&repo.root()) {
+                    let here = repo.root();
+                    let label = i18n::t!("app.swap.flag_swapped", name = self.checkout_name(&with));
+                    left = left.child(div().id("swap-badge").flex_none().cursor_pointer().hover(|s| s.opacity(0.85)).px(px(8.)).py(px(3.)).rounded_full().bg(t.tag.opacity(0.16)).text_color(t.tag).text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(label).tooltip(|window, cx| gpui_component::tooltip::Tooltip::new(i18n::t!("app.swap.go_back")).build(window, cx)).on_click(cx.listener(move |this, _, _, cx| this.ask_swap(with.clone(), here.clone(), cx))));
+                }
             }
             _ => left = left.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(crate::APP_NAME)),
         }
@@ -1123,6 +1136,8 @@ impl Render for RamaApp {
             .children(self.render_modal(&t, cx))
             .children(self.render_cleanup(&t, cx))
             .children(self.render_map_dialog(&t, cx))
+            .children(self.render_branch_picker(&t, cx))
+            .children(self.render_swap_dialog(&t, cx))
             .children(self.render_reclaim(&t, cx))
     }
 }
