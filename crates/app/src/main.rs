@@ -4,6 +4,7 @@
 mod agents;
 mod agents_view;
 mod app;
+mod branch_picker;
 mod cleanup;
 mod convo_view;
 mod detail;
@@ -20,6 +21,7 @@ mod star;
 mod storage;
 mod vcity;
 mod sidebar;
+mod swap_ui;
 mod theme;
 mod transcript;
 mod ui;
