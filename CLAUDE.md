@@ -48,17 +48,25 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
   switch the worktree; any failed step undoes the earlier ones. A conflicting apply stops and
   keeps the stash. Refuses rebase/merge/cherry-pick/revert/bisect in progress, conflicts, dirty
   submodules, LFS without `git lfs`, detached HEADs (swap). Swaps in effect: `<data root>/rama/swaps.tsv`.
-- **Free up space** (`repo/src/reclaim.rs`): the plan is pure and deterministic (kind, then path)
-  and never includes a worktree with changes / unreadable status / partial size, a locked one,
-  the open one, a protected branch's, or a path outside its worktree (or outside the shared
-  cargo folder). Merged = every commit on the default branch's remote-tracking ref and on its
-  upstream. `Repo::reclaim` re-checks before each item (still clean, still merged, real dir not
-  a symlink, build-folder name, inside the owner after canonicalising, not tracked by git) and
-  removes worktrees with plain `git worktree remove`, branches with `git branch -d`. Build
-  folders (`target/`, `node_modules/`, `.next/`, `incremental/`) are the only thing deleted
-  outright instead of moved to the Trash: they're regenerable and the dialog says so. A shared
-  cargo folder goes whole only if it carries `CACHEDIR.TAG` and neither its users nor the folder
-  itself changed for the configured days. Tests never touch real folders or the Trash.
+- **Free up space** (`repo/src/reclaim.rs`, `repo/src/safety.rs`): the plan is deterministic
+  (kind, then path) and never includes a worktree with changes / unreadable status / partial size,
+  a locked one, the open one, a protected branch's, a path outside its worktree, or anything in
+  a protected place (`safety.rs` mirrors diskmap's `scan::safety`: tool configs and installs,
+  hidden home folders, `~/Library`, cloud folders, bundles, the system; plus the home folder or a
+  volume root as a whole). Cargo target folders outside the repository are shown, never
+  offered. Build folders count only when generated (`is_artifact_dir`: `node_modules` / `.next` /
+  `dist` next to a `package.json`, `target` next to `Cargo.toml` / `pom.xml` or with
+  `CACHEDIR.TAG`, `build` next to `package.json` / Gradle file, `.gradle`, a project's
+  `DerivedData`). The dialog opens with **nothing selected**, shows each path's category and
+  what deleting it costs, and a native second confirm lists every path. `Repo::reclaim`
+  re-checks before each item (still clean, still merged, pushed, unlocked, a linked worktree of
+  this repo; real dir, no symlink on the way, build-folder kind, not protected, entirely
+  ignored by git) and **moves everything to the Trash** through an injected remover
+  (`reclaim::system_trash` in the app): build folders, and merged worktrees as whole folders
+  (their ignored files, from `git status --ignored`, are listed in the dialog and the report),
+  after which git forgets just that worktree (`git worktree remove` of the missing folder, a
+  `prune` only if it would touch nothing else). Branches: `git branch -d`. Tests use a fake
+  home and a fake Trash folder; never real folders or the Trash.
 - **Writes go through the `git` CLI** (`crates/repo/src/git.rs`), never gitoxide, so hooks,
   `core.hooksPath`, signing, LFS and credential helpers behave as in a terminal. Every git
   subprocess gets the login-shell environment from `shell_env` (GUI apps lack the shell PATH).

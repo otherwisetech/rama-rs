@@ -14,6 +14,7 @@ mod work;
 mod worktree;
 mod cleanup;
 pub mod reclaim;
+pub mod safety;
 pub mod swap;
 
 pub use git::{Cancel, GitError, Run, failed_hook, strip_ansi, version as git_version};
