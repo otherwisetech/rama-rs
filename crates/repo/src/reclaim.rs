@@ -317,8 +317,8 @@ pub fn delete_artifact(path: &Path, owner: &Path, home: Option<&Path>, remove: R
     if md.file_type().is_symlink() || !md.is_dir() {
         return Err(Skip::NotArtifact);
     }
-    let real = std::fs::canonicalize(path).map_err(|e| Skip::Failed(e.to_string()))?;
-    let root = std::fs::canonicalize(owner).map_err(|e| Skip::Failed(e.to_string()))?;
+    let real = safety::canonical(path).map_err(|e| Skip::Failed(e.to_string()))?;
+    let root = safety::canonical(owner).map_err(|e| Skip::Failed(e.to_string()))?;
     // nothing between the worktree and the folder may be a link
     let same_rel = matches!((real.strip_prefix(&root), path.strip_prefix(owner)), (Ok(a), Ok(b)) if a == b);
     if !same_rel || real == root {
@@ -403,7 +403,7 @@ fn git_path(dir: &Path, args: &[&str]) -> Option<PathBuf> {
     let s = String::from_utf8_lossy(&o).trim().to_string();
     let p = PathBuf::from(&s);
     let p = if p.is_absolute() { p } else { dir.join(p) };
-    std::fs::canonicalize(&p).ok()
+    safety::canonical(&p).ok()
 }
 
 impl Repo {
@@ -465,7 +465,7 @@ impl Repo {
         if md.file_type().is_symlink() || !md.is_dir() || s.paths.iter().any(|(p, _)| p != wt) {
             return Err(Skip::NotArtifact);
         }
-        if safety::removal_protected(wt, home) {
+        if safety::removal_protected(wt, home) || !safety::canonical(wt).is_ok_and(|c| !safety::removal_protected(&c, home)) {
             return Err(Skip::Protected);
         }
         // a linked worktree of this repository: its own git dir under the shared one

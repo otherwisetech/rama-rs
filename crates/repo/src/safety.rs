@@ -41,7 +41,21 @@ pub const PROJECT_MARKERS: &[&str] = &[".git", "package.json", "Cargo.toml", "po
 /// The user's home folder, canonical (`HOME`, `USERPROFILE` on Windows).
 pub fn user_home() -> Option<PathBuf> {
     let h = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty())?;
-    std::fs::canonicalize(&h).ok().or_else(|| Some(PathBuf::from(h)))
+    canonical(Path::new(&h)).ok().or_else(|| Some(PathBuf::from(h)))
+}
+
+/// `fs::canonicalize` without Windows' `\\?\` prefix, so the result compares with the plain
+/// paths git and the home folder use.
+pub fn canonical(p: &Path) -> std::io::Result<PathBuf> {
+    let c = std::fs::canonicalize(p)?;
+    #[cfg(windows)]
+    {
+        let s = c.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\").filter(|r| r.as_bytes().get(1) == Some(&b':')) {
+            return Ok(PathBuf::from(rest));
+        }
+    }
+    Ok(c)
 }
 
 fn names(p: &Path) -> Vec<&str> {
