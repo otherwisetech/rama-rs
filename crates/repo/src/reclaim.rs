@@ -1,9 +1,14 @@
 //! Disk space a repository's worktrees could give back: merged worktrees, cargo's incremental
-//! caches, and the build folders of worktrees nobody touched in a while. [`plan`] is pure and
-//! deterministic (the app shows its exact paths and sizes before anything happens);
-//! [`execute`] checks every rule again right before each delete.
+//! caches, and the build folders of worktrees nobody touched in a while. [`plan`] is
+//! deterministic (the app shows its exact paths, sizes, what each one is and what deleting it
+//! costs before anything happens, with nothing selected); [`Repo::reclaim`] checks every rule
+//! again right before each item and moves it to the Trash through the remover it is given
+//! (never a permanent delete). Paths in a tool's folder, a cloud folder or the system are never
+//! offered ([`crate::safety`]), and neither are cargo target folders outside the repository:
+//! other repositories, and builds running right now, may use them.
 use crate::git::{self, Cancel};
-use crate::worktree::{DiskUsage, WorktreeEntry};
+use crate::safety;
+use crate::worktree::{DiskUsage, WorktreeEntry, is_artifact_dir};
 use crate::{Repo, Result};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -16,24 +21,60 @@ pub const TODAY_THRESHOLD: u64 = 10 * 1024 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ReclaimKind {
     /// The worktree's branch is on the default branch, nothing is uncommitted or unpushed:
-    /// `git worktree remove`, then optionally `git branch -d`.
+    /// the folder goes to the Trash (with any ignored files in it), then git forgets it;
+    /// optionally `git branch -d`.
     MergedWorktree,
     /// `target/**/incremental`: cargo's incremental caches, rebuilt on the next build.
     Incremental,
     /// The whole `target/` of a worktree untouched for the configured days.
     StaleTarget,
-    /// `node_modules/` and `.next/` of a worktree untouched for the configured days.
+    /// Other build output (`node_modules/`, `.next/`, `dist/`, `build/`, `.gradle/`,
+    /// `DerivedData/`) of a worktree untouched for the configured days.
     StaleDeps,
+}
+
+/// What a path offered is, and so what deleting it costs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Category {
+    /// A whole merged worktree.
+    Worktree,
+    /// `incremental/` inside a cargo `target/`.
+    Incremental,
+    /// cargo / maven `target/`.
+    Target,
+    /// `node_modules/`: reinstalled by the package manager.
+    NodeModules,
+    /// `.next/`: Next.js' build and cache.
+    Next,
+    /// `dist/` / `build/`: the project's build output.
+    BuildOutput,
+    /// `.gradle/`: Gradle's project cache.
+    Gradle,
+    /// Xcode's `DerivedData/`.
+    DerivedData,
+}
+
+/// What `path` is, from its name (the plan only holds paths [`is_artifact_dir`] accepted).
+pub fn category(kind: ReclaimKind, path: &Path) -> Category {
+    if kind == ReclaimKind::MergedWorktree {
+        return Category::Worktree;
+    }
+    match path.file_name().and_then(|n| n.to_str()).unwrap_or_default() {
+        "incremental" => Category::Incremental,
+        "target" => Category::Target,
+        "node_modules" => Category::NodeModules,
+        ".next" => Category::Next,
+        ".gradle" => Category::Gradle,
+        "DerivedData" => Category::DerivedData,
+        _ => Category::BuildOutput,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suggestion {
     pub kind: ReclaimKind,
-    /// The worktree (or shared cargo target folder) the space is freed in.
+    /// The worktree the space is freed in.
     pub owner: PathBuf,
-    /// `owner` is a cargo target folder outside the repository, used by `users`.
-    pub shared: bool,
-    pub users: Vec<PathBuf>,
     /// Merged worktrees: their branch, deleted with `git branch -d` only if the user asks
     /// (never a protected one).
     pub branch: Option<String>,
@@ -44,7 +85,8 @@ pub struct Suggestion {
     pub idle_days: i64,
 }
 
-/// A cargo target folder outside the repository that some worktrees build into.
+/// A cargo target folder outside the repository that some worktrees build into. Shown for
+/// information only: never in the plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedTarget {
     pub path: PathBuf,
@@ -56,11 +98,12 @@ pub struct SharedTarget {
 pub struct PlanInput<'a> {
     pub entries: &'a [WorktreeEntry],
     pub usage: &'a HashMap<PathBuf, DiskUsage>,
-    pub shared: &'a [SharedTarget],
     /// The worktree this window has open: never removed.
     pub current: Option<&'a Path>,
     /// Branch patterns never deleted (and their worktrees never removed).
     pub protected: &'a [String],
+    /// The user's home folder ([`safety::user_home`]), for the protected places.
+    pub home: Option<&'a Path>,
     pub now: i64,
     pub stale_days: u32,
 }
@@ -84,7 +127,7 @@ pub fn last_touched(e: &WorktreeEntry, u: &DiskUsage) -> i64 {
 }
 
 fn removable(e: &WorktreeEntry, input: &PlanInput) -> bool {
-    !e.wt.main && e.wt.locked.is_none() && input.current != Some(e.wt.path.as_path()) && is_clean(e) && nothing_unpushed(e) && !e.wt.branch.as_deref().is_some_and(|b| crate::is_protected(b, input.protected))
+    !e.wt.main && e.wt.locked.is_none() && input.current != Some(e.wt.path.as_path()) && is_clean(e) && nothing_unpushed(e) && !e.wt.branch.as_deref().is_some_and(|b| crate::is_protected(b, input.protected)) && !safety::removal_protected(&e.wt.path, input.home)
 }
 
 /// `path` lies inside `root` (or is it, with `or_equal`), compared without touching the disk:
@@ -94,6 +137,13 @@ pub fn contained(path: &Path, root: &Path, or_equal: bool) -> bool {
     plain(path) && plain(root) && path.starts_with(root) && (or_equal || path != root)
 }
 
+/// A build folder `path` of the worktree `owner` may be offered: strictly inside it, the
+/// worktree isn't in a protected place, and nothing between them is a tool's folder or bundle,
+/// nor is `path` a project itself.
+pub fn may_offer(path: &Path, owner: &Path, home: Option<&Path>) -> bool {
+    contained(path, owner, false) && !safety::place_protected(owner, home) && !safety::protected_below(path, owner)
+}
+
 fn is_target(p: &Path) -> bool {
     p.file_name().is_some_and(|n| n == "target")
 }
@@ -101,36 +151,30 @@ fn is_target(p: &Path) -> bool {
 /// What could be cleaned up, in a stable order (kind, then folder). Worktrees with
 /// uncommitted changes, unreadable status or a partial size are never in it; a removed
 /// worktree isn't offered anything else, and a `target/` offered whole doesn't also list its
-/// incremental caches.
+/// incremental caches. Worktrees in a protected place ([`safety::place_protected`]) get
+/// nothing, and no path below a worktree that runs through a tool's folder is offered.
 pub fn plan(input: &PlanInput) -> Vec<Suggestion> {
     let mut out: Vec<Suggestion> = Vec::new();
     let days = |t: i64| ((input.now - t).max(0)) / 86_400;
     let stale_after = input.stale_days as i64;
-    let mut idle: HashMap<&Path, Option<i64>> = HashMap::new();
     for e in input.entries {
-        let Some(u) = input.usage.get(&e.wt.path).filter(|u| !u.partial) else {
-            idle.insert(&e.wt.path, None);
-            continue;
-        };
-        if !is_clean(e) {
-            idle.insert(&e.wt.path, None);
+        let Some(u) = input.usage.get(&e.wt.path).filter(|u| !u.partial) else { continue };
+        if !is_clean(e) || safety::place_protected(&e.wt.path, input.home) {
             continue;
         }
         let owner = e.wt.path.clone();
         let idle_days = days(last_touched(e, u));
         let mk = |kind, paths: Vec<(PathBuf, u64)>, branch: Option<String>| {
-            let mut paths: Vec<(PathBuf, u64)> = paths.into_iter().filter(|(p, b)| *b > 0 && contained(p, &owner, kind == ReclaimKind::MergedWorktree)).collect();
+            let merged = kind == ReclaimKind::MergedWorktree;
+            let mut paths: Vec<(PathBuf, u64)> = paths.into_iter().filter(|(p, b)| *b > 0 && if merged { *p == owner && contained(p, &owner, true) } else { may_offer(p, &owner, input.home) }).collect();
             paths.sort();
-            Suggestion { kind, owner: owner.clone(), shared: false, users: Vec::new(), branch, bytes: paths.iter().map(|(_, b)| b).sum(), paths, idle_days }
+            Suggestion { kind, owner: owner.clone(), branch, bytes: paths.iter().map(|(_, b)| b).sum(), paths, idle_days }
         };
         if removable(e, input) {
-            // a worktree removed counts as idle for the shared targets it used
-            idle.insert(&e.wt.path, Some(i64::MAX));
             let branch = e.wt.branch.clone().filter(|b| !crate::is_protected(b, input.protected));
             out.push(mk(ReclaimKind::MergedWorktree, vec![(owner.clone(), u.total)], branch));
             continue;
         }
-        idle.insert(&e.wt.path, Some(idle_days));
         let stale = idle_days >= stale_after;
         let targets: Vec<(PathBuf, u64)> = u.artifacts.iter().filter(|(p, _)| is_target(p)).cloned().collect();
         let deps: Vec<(PathBuf, u64)> = u.artifacts.iter().filter(|(p, _)| !is_target(p)).cloned().collect();
@@ -140,21 +184,6 @@ pub fn plan(input: &PlanInput) -> Vec<Suggestion> {
             out.push(mk(ReclaimKind::StaleTarget, targets, None));
             out.push(mk(ReclaimKind::StaleDeps, deps, None));
         }
-    }
-    for s in input.shared {
-        if s.usage.partial || s.users.is_empty() {
-            continue;
-        }
-        // every user must be known and clean; the folder is idle only when all of them are
-        let users: Option<Vec<i64>> = s.users.iter().map(|u| idle.get(u.as_path()).copied().flatten()).collect();
-        let Some(users) = users else { continue };
-        // other repositories may build there too: the folder's own last change counts
-        let idle_days = users.iter().copied().min().unwrap_or(0).min(days(s.usage.touched));
-        let whole = idle_days >= stale_after;
-        let (kind, paths) = if whole { (ReclaimKind::StaleTarget, vec![(s.path.clone(), s.usage.total)]) } else { (ReclaimKind::Incremental, s.usage.incremental.clone()) };
-        let mut paths: Vec<(PathBuf, u64)> = paths.into_iter().filter(|(p, b)| *b > 0 && contained(p, &s.path, whole)).collect();
-        paths.sort();
-        out.push(Suggestion { kind, owner: s.path.clone(), shared: true, users: s.users.clone(), branch: None, bytes: paths.iter().map(|(_, b)| b).sum(), paths, idle_days });
     }
     out.retain(|s| !s.paths.is_empty() && s.bytes > 0);
     out.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.owner.cmp(&b.owner)));
@@ -243,52 +272,108 @@ pub enum Skip {
     Changed,
     /// Its HEAD is no longer on the default branch (new commits since the plan).
     NotMerged,
-    /// Not a real folder inside the worktree / target folder, or not a build folder.
+    /// Its branch has commits its upstream doesn't.
+    Unpushed,
+    /// The worktree is locked.
+    Locked,
+    /// Not a real folder inside the worktree, or not a build folder.
     NotArtifact,
-    /// git tracks files in it.
+    /// A place rama never touches (tool config or install, cloud folder, system…).
+    Protected,
+    /// git tracks files in it, or sees files there that aren't ignored.
     Tracked,
+    /// git couldn't list the files it doesn't track there.
+    Unreadable,
     Failed(String),
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Report {
+    /// Bytes moved to the Trash (given back once it is emptied).
     pub freed: u64,
     pub done: Vec<PathBuf>,
     pub skipped: Vec<(PathBuf, Skip)>,
+    /// Removed worktrees that held files git doesn't track (ignored `.env`, notes…): they are
+    /// in the Trash with the folder.
+    pub kept_in_trash: Vec<(PathBuf, Vec<String>)>,
     pub branches_deleted: Vec<String>,
     pub branches_failed: Vec<(String, String)>,
 }
 
-/// Remove a build folder for good (no Trash: it's regenerated by building, and the Trash would
-/// keep the space). Refuses a symlink, anything that isn't a directory, and anything that,
-/// after resolving links, isn't strictly inside `owner` with a build-folder name — or, for a
-/// shared cargo folder, `owner` itself carrying cargo's `CACHEDIR.TAG`.
-pub fn delete_artifact(path: &Path, owner: &Path, shared: bool) -> std::result::Result<(), Skip> {
+/// Moves a path to the Trash. The app passes [`system_trash`]; tests pass their own.
+pub type Remover<'a> = &'a mut dyn FnMut(&Path) -> std::result::Result<(), String>;
+
+/// The system Trash.
+pub fn system_trash(p: &Path) -> std::result::Result<(), String> {
+    trash::delete(p).map_err(|e| e.to_string())
+}
+
+/// Hand a build folder to `remove` (the Trash) after checking it again: a real directory, not a
+/// symlink and nothing linked on the way, strictly inside `owner` after resolving links, of a
+/// build-folder kind ([`is_artifact_dir`], or `incremental/` inside such a `target/`), not in
+/// a protected place, and (in a repository) entirely ignored by git.
+pub fn delete_artifact(path: &Path, owner: &Path, home: Option<&Path>, remove: Remover) -> std::result::Result<(), Skip> {
     let md = std::fs::symlink_metadata(path).map_err(|e| Skip::Failed(e.to_string()))?;
     if md.file_type().is_symlink() || !md.is_dir() {
         return Err(Skip::NotArtifact);
     }
     let real = std::fs::canonicalize(path).map_err(|e| Skip::Failed(e.to_string()))?;
     let root = std::fs::canonicalize(owner).map_err(|e| Skip::Failed(e.to_string()))?;
-    let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let ok = if real == root {
-        shared && real.join("CACHEDIR.TAG").is_file()
-    } else {
-        let named = name == "incremental" || crate::worktree::is_artifact_dir(&real);
-        let incremental_ok = name != "incremental" || real.ancestors().skip(1).any(|a| a == root || is_target(a));
-        real.starts_with(&root) && named && incremental_ok
-    };
-    if !ok {
+    // nothing between the worktree and the folder may be a link
+    let same_rel = matches!((real.strip_prefix(&root), path.strip_prefix(owner)), (Ok(a), Ok(b)) if a == b);
+    if !same_rel || real == root {
         return Err(Skip::NotArtifact);
     }
-    std::fs::remove_dir_all(&real).map_err(|e| Skip::Failed(e.to_string()))
+    // the path as planned and as it resolves must both pass
+    if !may_offer(path, owner, home) || !may_offer(&real, &root, home) {
+        return Err(Skip::Protected);
+    }
+    let incremental = real.file_name().is_some_and(|n| n == "incremental") && real.ancestors().skip(1).take_while(|a| *a != root).any(|a| is_target(a) && is_artifact_dir(a));
+    if !(incremental || is_artifact_dir(&real)) {
+        return Err(Skip::NotArtifact);
+    }
+    if git_ignores_all(owner, path) != Some(true) {
+        return Err(Skip::Tracked);
+    }
+    remove(&real).map_err(Skip::Failed)
 }
 
-/// git tracks something under `path` in `worktree` (a committed `node_modules`, say).
-fn tracked_under(worktree: &Path, path: &Path) -> bool {
-    let Ok(rel) = path.strip_prefix(worktree) else { return false };
-    let rel = rel.to_string_lossy().replace('\\', "/");
-    git::output(worktree, &["ls-files", "-z", "--", &rel]).map(|o| !o.is_empty()).unwrap_or(true)
+/// git's view of `path` in the worktree at `worktree`: `true` when nothing under it is tracked
+/// and nothing there is untracked-but-not-ignored. `None` when git can't tell.
+pub fn git_ignores_all(worktree: &Path, path: &Path) -> Option<bool> {
+    let rel = path.strip_prefix(worktree).ok()?.to_string_lossy().replace('\\', "/");
+    let tracked = git::output(worktree, &["ls-files", "-z", "--", &rel]).ok()?;
+    let status = git::output(worktree, &["--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=all", "--", &rel]).ok()?;
+    Some(tracked.is_empty() && status.is_empty())
+}
+
+/// Files in `worktree` git doesn't track, other than regenerable build output: ignored ones
+/// (`.env`, local configs, notes) and untracked ones, as git lists them (relative, `/`, a
+/// folder whose contents are all ignored ends in `/`). Removing a worktree with plain
+/// `git worktree remove` would delete these for good; rama moves the folder to the Trash
+/// instead and shows them first. `None` when git can't tell.
+pub fn untracked_keepers(worktree: &Path) -> Option<Vec<String>> {
+    let raw = git::output(worktree, &["--no-optional-locks", "status", "--porcelain", "-z", "--ignored=traditional", "--untracked-files=normal"]).ok()?;
+    let mut out = Vec::new();
+    let mut fields = raw.split(|b| *b == 0).filter(|f| !f.is_empty());
+    while let Some(f) = fields.next() {
+        let line = String::from_utf8_lossy(f);
+        let (xy, rel) = (line.get(..2).unwrap_or_default(), line.get(3..).unwrap_or_default());
+        if xy.starts_with('R') || xy.starts_with('C') {
+            fields.next(); // the rename's source
+        }
+        if xy != "!!" && xy != "??" {
+            continue;
+        }
+        let abs = worktree.join(rel.trim_end_matches('/'));
+        let name = abs.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        if name == ".DS_Store" || abs.is_dir() && !abs.is_symlink() && is_artifact_dir(&abs) {
+            continue;
+        }
+        out.push(rel.to_string());
+    }
+    out.sort();
+    Some(out)
 }
 
 fn clean_now(worktree: &Path) -> bool {
@@ -302,58 +387,111 @@ fn head_merged(worktree: &Path, rev: &str) -> bool {
     !h.is_empty() && git::output(worktree, &["merge-base", "--is-ancestor", &h, rev]).is_ok()
 }
 
+/// The branch has commits its (existing) upstream lacks.
+fn unpushed_now(worktree: &Path) -> bool {
+    if git::output(worktree, &["rev-parse", "--verify", "-q", "@{upstream}"]).is_err() {
+        return false; // no upstream, or it is gone: merged into the default branch is enough
+    }
+    match git::output(worktree, &["rev-list", "--count", "@{upstream}..HEAD"]) {
+        Ok(n) => String::from_utf8_lossy(&n).trim() != "0",
+        Err(_) => true,
+    }
+}
+
+fn git_path(dir: &Path, args: &[&str]) -> Option<PathBuf> {
+    let o = git::output(dir, args).ok()?;
+    let s = String::from_utf8_lossy(&o).trim().to_string();
+    let p = PathBuf::from(&s);
+    let p = if p.is_absolute() { p } else { dir.join(p) };
+    std::fs::canonicalize(&p).ok()
+}
+
 impl Repo {
     /// Carry out the chosen suggestions, one failure not stopping the rest. Before each one
-    /// the worktree must still be clean (and, to be removed, still merged into `default_rev`);
-    /// worktrees go through plain `git worktree remove` (git refuses changes itself), branches
-    /// through `git branch -d` when `delete_branches`.
-    pub fn reclaim(&self, items: &[Suggestion], default_rev: &str, delete_branches: bool, cancel: &Cancel, on_line: &mut dyn FnMut(&str, bool)) -> Result<Report> {
+    /// the worktree must still be clean (and, to be removed: still merged into `default_rev`,
+    /// pushed, unlocked, a linked worktree of this repository). Everything goes through
+    /// `remove` (the Trash): build folders, and merged worktrees as whole folders, with any
+    /// ignored files in them ([`untracked_keepers`], listed in the report); git then forgets
+    /// the worktree (`git worktree remove` of the now missing folder). Branches go through
+    /// `git branch -d` when `delete_branches`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reclaim(&self, items: &[Suggestion], default_rev: &str, delete_branches: bool, home: Option<&Path>, remove: Remover, cancel: &Cancel, on_line: &mut dyn FnMut(&str, bool)) -> Result<Report> {
         let mut r = Report::default();
+        let common = git_path(&self.cwd(), &["rev-parse", "--git-common-dir"]);
         for s in items {
             if cancel.is_cancelled() {
                 break;
             }
-            let users: Vec<&Path> = if s.shared { s.users.iter().map(PathBuf::as_path).collect() } else { vec![s.owner.as_path()] };
-            if let Some(dirty) = users.iter().find(|u| u.is_dir() && !clean_now(u)) {
-                r.skipped.push((dirty.to_path_buf(), Skip::Changed));
+            if s.owner.is_dir() && !clean_now(&s.owner) {
+                r.skipped.push((s.owner.clone(), Skip::Changed));
                 continue;
             }
-            if s.kind == ReclaimKind::MergedWorktree {
-                if !head_merged(&s.owner, default_rev) {
-                    r.skipped.push((s.owner.clone(), Skip::NotMerged));
-                    continue;
+            if s.kind != ReclaimKind::MergedWorktree {
+                for (p, bytes) in &s.paths {
+                    match delete_artifact(p, &s.owner, home, &mut *remove) {
+                        Ok(()) => {
+                            r.freed += bytes;
+                            r.done.push(p.clone());
+                        }
+                        Err(e) => r.skipped.push((p.clone(), e)),
+                    }
                 }
-                let args = Repo::worktree_remove_args(&s.owner, false);
-                match self.run_args(&args, cancel, on_line) {
-                    Ok(run) if run.success => {
-                        r.freed += s.bytes;
-                        r.done.push(s.owner.clone());
-                        if let Some(b) = s.branch.as_ref().filter(|_| delete_branches) {
-                            match self.delete_branch(b) {
-                                Ok(_) => r.branches_deleted.push(b.clone()),
-                                Err(e) => r.branches_failed.push((b.clone(), e.to_string())),
-                            }
+                continue;
+            }
+            match self.remove_merged(s, default_rev, home, &common, &mut *remove, cancel, on_line) {
+                Err(skip) => r.skipped.push((s.owner.clone(), skip)),
+                Ok(keepers) => {
+                    r.freed += s.bytes;
+                    r.done.push(s.owner.clone());
+                    if !keepers.is_empty() {
+                        r.kept_in_trash.push((s.owner.clone(), keepers));
+                    }
+                    if let Some(b) = s.branch.as_ref().filter(|_| delete_branches) {
+                        match self.delete_branch(b) {
+                            Ok(_) => r.branches_deleted.push(b.clone()),
+                            Err(e) => r.branches_failed.push((b.clone(), e.to_string())),
                         }
                     }
-                    Ok(run) => r.skipped.push((s.owner.clone(), Skip::Failed(run.output))),
-                    Err(e) => r.skipped.push((s.owner.clone(), Skip::Failed(e.to_string()))),
-                }
-                continue;
-            }
-            for (p, bytes) in &s.paths {
-                if !s.shared && tracked_under(&s.owner, p) {
-                    r.skipped.push((p.clone(), Skip::Tracked));
-                    continue;
-                }
-                match delete_artifact(p, &s.owner, s.shared) {
-                    Ok(()) => {
-                        r.freed += bytes;
-                        r.done.push(p.clone());
-                    }
-                    Err(e) => r.skipped.push((p.clone(), e)),
                 }
             }
         }
         Ok(r)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn remove_merged(&self, s: &Suggestion, default_rev: &str, home: Option<&Path>, common: &Option<PathBuf>, remove: Remover, cancel: &Cancel, on_line: &mut dyn FnMut(&str, bool)) -> std::result::Result<Vec<String>, Skip> {
+        let wt = &s.owner;
+        let md = std::fs::symlink_metadata(wt).map_err(|e| Skip::Failed(e.to_string()))?;
+        if md.file_type().is_symlink() || !md.is_dir() || s.paths.iter().any(|(p, _)| p != wt) {
+            return Err(Skip::NotArtifact);
+        }
+        if safety::removal_protected(wt, home) {
+            return Err(Skip::Protected);
+        }
+        // a linked worktree of this repository: its own git dir under the shared one
+        let gitdir = git_path(wt, &["rev-parse", "--absolute-git-dir"]).ok_or(Skip::NotArtifact)?;
+        let own = git_path(wt, &["rev-parse", "--git-common-dir"]);
+        if own.is_none() || own != *common || Some(&gitdir) == own.as_ref() {
+            return Err(Skip::NotArtifact);
+        }
+        if gitdir.join("locked").exists() {
+            return Err(Skip::Locked);
+        }
+        if !head_merged(wt, default_rev) {
+            return Err(Skip::NotMerged);
+        }
+        if unpushed_now(wt) {
+            return Err(Skip::Unpushed);
+        }
+        let keepers = untracked_keepers(wt).ok_or(Skip::Unreadable)?;
+        remove(wt).map_err(Skip::Failed)?;
+        // the folder is in the Trash: git forgets just this worktree (a plain prune would also
+        // forget others whose disk is merely unplugged)
+        let args = Repo::worktree_remove_args(wt, false);
+        let forgot = self.run_args(&args, cancel, on_line).map(|r| r.success).unwrap_or(false);
+        if !forgot && self.worktree_prune_preview().is_ok_and(|l| l.iter().all(|l| gitdir.file_name().is_some_and(|n| l.contains(&*n.to_string_lossy())))) {
+            let _ = self.run_args(&["worktree".to_string(), "prune".to_string()], cancel, on_line);
+        }
+        Ok(keepers)
     }
 }

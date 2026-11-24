@@ -178,8 +178,8 @@ pub struct DiskUsage {
     /// folders: when someone last worked here ([`target_usage`]: of anything in it, i.e. the
     /// last build). 0 when nothing was found.
     pub touched: i64,
-    /// Regenerable build folders (`target/` of cargo or maven, `node_modules/`, `.next/`), the
-    /// outermost of each, with their size; sorted by path.
+    /// Regenerable build folders ([`is_artifact_dir`]), the outermost of each, with their
+    /// size; sorted by path.
     pub artifacts: Vec<(PathBuf, u64)>,
     /// `incremental/` caches inside those `target/` folders (`target/debug/incremental`,
     /// `target/<triple>/release/incremental`…), sorted by path.
@@ -189,16 +189,23 @@ pub struct DiskUsage {
 /// Folder names reported separately in [`DiskUsage::parts`].
 pub const HEAVY_DIRS: &[&str] = &["node_modules", ".git", "target", ".next", ".turbo", ".venv", ".gradle", "Pods", "vendor"];
 
-/// Is `dir` (a folder named like a build artifact) really one? `target/` only next to a
-/// `Cargo.toml` / `pom.xml` or tagged by cargo (`CACHEDIR.TAG`), `.next/` only next to a
-/// `package.json`; `node_modules/` always.
+/// Is `dir` (a folder named like a build artifact) really one, judged by the files next to
+/// it? `node_modules/`, `.next/` and `dist/` only next to a `package.json` (a `node_modules`
+/// without one is a global or tool install), `target/` next to a `Cargo.toml` / `pom.xml` or
+/// tagged by cargo (`CACHEDIR.TAG`), `build/` next to a `package.json` or a Gradle build file,
+/// `.gradle/` next to a Gradle file, a project's own `DerivedData/`. Whether git ignores it
+/// (i.e. it is generated, not sources) is checked again right before anything goes.
 pub fn is_artifact_dir(dir: &Path) -> bool {
     let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let parent = dir.parent().unwrap_or(dir);
+    let Some(parent) = dir.parent() else { return false };
+    let has = |files: &[&str]| files.iter().any(|f| parent.join(f).is_file());
+    const GRADLE: &[&str] = &["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"];
     match name.as_str() {
-        "node_modules" => true,
-        "target" => dir.join("CACHEDIR.TAG").is_file() || parent.join("Cargo.toml").is_file() || parent.join("pom.xml").is_file(),
-        ".next" => parent.join("package.json").is_file(),
+        "node_modules" | ".next" | "dist" => has(&["package.json"]),
+        "target" => dir.join("CACHEDIR.TAG").is_file() || has(&["Cargo.toml", "pom.xml"]),
+        "build" => has(&["package.json", "build.gradle", "build.gradle.kts"]),
+        ".gradle" => has(GRADLE),
+        "DerivedData" => parent.file_name().is_some_and(|n| n != "Xcode"),
         _ => false,
     }
 }
@@ -270,6 +277,8 @@ fn walk(root: &Path, skip: &[PathBuf], cancel: &Cancel, root_is_target: bool) ->
                     next.heavy = Some(name.clone());
                 }
                 if is_artifact_dir(&next.dir) {
+                    // build output isn't "someone worked here", and nothing nested counts twice
+                    next.heavy.get_or_insert_with(|| name.clone());
                     out.artifacts.push((next.dir.clone(), size));
                     next.artifact = Some(out.artifacts.len() - 1);
                     next.in_target = name == "target";

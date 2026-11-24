@@ -64,15 +64,22 @@ Linux. UI in Spanish, English, Portuguese and French.
   again to swap back. Uncommitted changes travel with their branch (tagged stashes applied by SHA,
   untracked files included, ignored files stay put); a conflict stops and keeps the stash. Both
   cards and the top bar say "⇄ swapped with …" until you swap back, even after a restart.
-- **Free up space…** (map toolbar, totals panel, a worktree's panel) offers, with every path and
-  size listed before anything happens: worktrees whose branch is merged into the default branch
-  with nothing uncommitted or unpushed (`git worktree remove`, optionally `git branch -d`);
-  cargo's `target/**/incremental` caches; the whole `target/` and the `node_modules/` / `.next/`
-  of worktrees untouched for 14 days (configurable). Build folders are deleted directly (they are
-  regenerated, and the Trash would keep the space); the dialog says so. Worktrees with
-  uncommitted changes, locked ones, the one open in the window and protected branches are never
-  touched, nothing outside the listed worktree or target folders is deleted, a committed
-  `node_modules` is kept, and every rule is checked again right before each delete.
+- **Free up space…** (map toolbar, totals panel, a worktree's panel) lists, with nothing
+  selected, every path, its size, what it is and what deleting it costs: worktrees whose branch
+  is merged into the default branch with nothing uncommitted or unpushed (optionally
+  `git branch -d`); cargo's `target/**/incremental` caches; the whole `target/` and the
+  `node_modules/`, `.next/`, `dist/` / `build/`, `.gradle/`, `DerivedData/` of worktrees untouched
+  for 14 days (configurable). Everything goes to the **Trash**, after a second confirmation that
+  lists every path; nothing is deleted for good. A merged worktree goes to the Trash as a whole
+  folder (git then forgets it), so files git ignores there (`.env`, local configs, notes) are
+  listed first and stay recoverable. Build folders count only when generated: `node_modules/`
+  next to a `package.json`, `dist/` / `build/` only if git ignores everything in them.
+  Worktrees with uncommitted or unpushed work, locked ones, the one open in the window and
+  protected branches are never touched, nor are tool settings and installs (`~/.config`,
+  `~/.codex`, `~/.cargo`, `.vscode*`…), `~/Library`, cloud folders, apps or anything outside the
+  worktree; cargo target folders outside the repository are shown but never offered (other
+  repositories and running builds may use them). Every rule is checked again right before each
+  item moves.
   *Open in diskmap* shows the folder in [diskmap](https://github.com/otherwisetech/diskmap-rs)
   when it's installed.
 - Worktree actions (side panel and right-click): open in the file manager, open in a new rama
