@@ -22,7 +22,7 @@ pub struct AgentBadges {
     pub reduce_motion: bool,
     /// A system notification when an agent starts needing you (macOS).
     pub notify: bool,
-    /// Agents that need you go to Otherwise Apps' Today.
+    /// Agents that need you go to Otherwise Hub's Today.
     pub today: bool,
     /// Agents per worktree path (as git lists it).
     pub found: Rc<Found>,
@@ -296,8 +296,8 @@ impl RamaApp {
                             .flex_col()
                             .flex_1()
                             .min_w_0()
-                            .child(div().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).child(i18n::t!("app.agents.line", agent = a.kind, state = state_label(a))))
-                            .children(sub.into_iter().map(|s| div().text_size(px(11.5)).text_color(t.ink_muted).truncate().child(s)))
+                            .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(i18n::t!("app.agents.line", agent = a.kind, state = state_label(a))))
+                            .children(sub.into_iter().map(|s| div().text_size(px(12.)).text_color(t.ink_muted).truncate().child(s)))
                             .when(!readable, |d| d.child(div().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.convo.unavailable", agent = a.kind)))),
                     )
                     .when(readable, |d| d.child(crate::ui::icon(gpui_component::IconName::ChevronRight, 14., t.ink_muted)))

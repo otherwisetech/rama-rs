@@ -300,7 +300,7 @@ fn render_item(t: &Tokens, item: &Item, kind: &'static str, open: bool, ix: usiz
                 .flex()
                 .items_center()
                 .gap(px(5.))
-                .text_size(px(11.5))
+                .text_size(px(12.))
                 .text_color(color)
                 .cursor_pointer()
                 .child(icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 12., color))
@@ -324,7 +324,7 @@ fn render_item(t: &Tokens, item: &Item, kind: &'static str, open: bool, ix: usiz
 /// Just enough markdown for chat text: fenced code in monospace, headings bold, the rest as
 /// written.
 fn md(t: &Tokens, text: &str) -> Div {
-    let mut out = div().flex().flex_col().gap(px(2.)).text_size(px(12.5)).line_height(px(18.));
+    let mut out = div().flex().flex_col().gap(px(2.)).text_size(px(13.)).line_height(px(18.));
     let mut code: Option<Vec<&str>> = None;
     for line in text.lines() {
         if line.trim_start().starts_with("```") {

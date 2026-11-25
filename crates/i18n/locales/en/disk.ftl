@@ -73,6 +73,6 @@ app.reclaim.open_diskmap = Open in diskmap
 app.reclaim.diskmap_failed = Couldn’t open diskmap: {detail}
 app.reclaim.set_days = Build folders are offered after this many days without changes
 app.reclaim.set_days_hint = Applies to target/, node_modules/, .next/, dist/, build/ and the like of worktrees with no changes or commits for that long.
-app.reclaim.set_today = Tell Otherwise Apps’ Today when a repository could free more than 10 GB
+app.reclaim.set_today = Tell Otherwise Hub’ Today when a repository could free more than 10 GB
 app.today.reclaim = {size} can be freed in {repo}
 app.today.reclaim_body = Merged worktrees and build caches; rama lists every path and moves nothing until you pick it and confirm.

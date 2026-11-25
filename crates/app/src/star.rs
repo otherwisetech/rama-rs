@@ -169,27 +169,10 @@ pub fn footer_link(t: &Tokens, cx: &App) -> Stateful<Div> {
 
 /// About modal button: outlined, GitHub mark, «Star on GitHub», ★ count.
 pub fn about_button(t: &Tokens, cx: &App) -> Stateful<Div> {
-    let hover = t.border_strong;
-    div()
-        .id("about-star")
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(6.))
-        .h(px(30.))
-        .px(px(12.))
-        .rounded(px(8.))
-        .border_1()
-        .border_color(t.border)
-        .bg(t.surface)
-        .text_size(px(13.))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(t.ink)
-        .cursor_pointer()
-        .hover(move |s| s.border_color(hover))
-        .child(crate::ui::icon(IconName::Github, 14., t.ink))
+    otherwise_ui::outline_button(t, "about-star")
+        .child(crate::ui::icon(IconName::Github, otherwise_ui::tokens::icon::SM, t.ink))
         .child(i18n::t!("app.star.label"))
-        .child(div().pl(px(6.)).border_l_1().border_color(t.border).text_color(t.ink_muted).child(star_count(t.tag, 13., count(cx))))
+        .child(div().pl(px(6.)).border_l_1().border_color(t.border).text_color(t.ink_muted).child(star_count(t.tag, otherwise_ui::tokens::text::BODY, count(cx))))
         .on_click(open_repo)
 }
 

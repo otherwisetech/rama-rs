@@ -73,6 +73,6 @@ app.reclaim.open_diskmap = Abrir en diskmap
 app.reclaim.diskmap_failed = No se pudo abrir diskmap: {detail}
 app.reclaim.set_days = Ofrecer carpetas de compilación tras estos días sin cambios
 app.reclaim.set_days_hint = Aplica a target/, node_modules/, .next/, dist/, build/ y similares de worktrees sin cambios ni commits durante ese tiempo.
-app.reclaim.set_today = Avisar en Hoy de Otherwise Apps cuando un repositorio pueda liberar más de 10 GB
+app.reclaim.set_today = Avisar en Hoy de Otherwise Hub cuando un repositorio pueda liberar más de 10 GB
 app.today.reclaim = Se pueden liberar {size} en {repo}
 app.today.reclaim_body = Worktrees fusionados y cachés de compilación; rama muestra cada ruta y no mueve nada hasta que lo elijas y confirmes.

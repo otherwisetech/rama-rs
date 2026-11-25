@@ -185,7 +185,7 @@ rama uses [otherwise-link](https://github.com/otherwisetech/otherwise-link), the
 Otherwise Technologies' apps share. Everything stays on your computer.
 
 - **Links.** rama opens `otherwise-rama://` links (also `otherwise://rama/…` through
-  [Otherwise Apps](https://github.com/otherwisetech/otherwise-apps)); paths are absolute and
+  [Otherwise Hub](https://github.com/otherwisetech/otherwise-apps)); paths are absolute and
   percent-encoded:
 
   | Link | Does |
@@ -202,7 +202,7 @@ Otherwise Technologies' apps share. Everything stays on your computer.
   `x-scheme-handler/otherwise-rama` and rama makes itself the handler when that file is in
   `~/.local/share/applications`.
 - **Today.** Agents that wait for you (a question or a permission prompt, the raised hand) or lost
-  their connection show up in Otherwise Apps' *Today* view, linking to their conversation. Only
+  their connection show up in Otherwise Hub's *Today* view, linking to their conversation. Only
   the agent's name, the worktree's folder and what it waits for are written
   (`today/rama.json` in the shared Otherwise folder), never titles or conversation text. The
   list comes from the same poll as the badges, so it is only refreshed while rama is on screen;
@@ -218,7 +218,7 @@ rama works on your repositories in place and keeps no documents of its own. Its 
 repositories and small caches (folder sizes in `sizes.json`, star count) are in the Otherwise
 data folder, plus `worktrees.txt`, the worktree folders rama has listed (one per line, so diskmap
 can mark them), all
-`~/.otherwise/rama/` (or wherever you moved the data root in Otherwise Apps). Version 0.4 moves
+`~/.otherwise/rama/` (or wherever you moved the data root in Otherwise Hub). Version 0.4 moves
 them there once from the old folder (`~/Library/Application Support/rama`, `%APPDATA%\rama`,
 `~/.config/rama`), never overwriting anything, and leaves a `.migrated-to-otherwise` note.
 *Show rama's settings folder* is in the app menu and the globe menu; worktrees have *Show in

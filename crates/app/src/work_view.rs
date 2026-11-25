@@ -219,7 +219,7 @@ impl RamaApp {
             .when(open, |d| d.bg(t.accent_soft))
             .when(!open, |d| d.hover(move |s| s.bg(hover)))
             .child(div().flex().flex_none().items_center().justify_center().size(px(16.)).rounded(px(4.)).bg(sc.opacity(0.16)).text_color(sc).text_size(px(10.)).font_weight(FontWeight::BOLD).child(work_letter(&f.state)))
-            .child(div().flex().flex_1().min_w_0().text_size(px(12.5)).child(div().flex_none().text_color(t.ink).child(name)).child(div().min_w_0().truncate().pl(px(6.)).text_color(t.ink_muted).child(from.map(|f| format!("← {f}")).unwrap_or(dir)))) // i18n-ok: arrow
+            .child(div().flex().flex_1().min_w_0().text_size(px(13.)).child(div().flex_none().text_color(t.ink).child(name)).child(div().min_w_0().truncate().pl(px(6.)).text_color(t.ink_muted).child(from.map(|f| format!("← {f}")).unwrap_or(dir)))) // i18n-ok: arrow
             .child(actions)
             .on_click(cx.listener(move |this, _, _, cx| this.open_work_diff(file.clone(), staged, cx)))
             .into_any_element()
@@ -267,8 +267,8 @@ impl RamaApp {
                 .bg(t.danger.opacity(0.08))
                 .border_1()
                 .border_color(t.danger.opacity(0.45))
-                .child(div().flex().items_center().gap(px(6.)).child(icon(IconName::TriangleAlert, 14., t.danger)).child(div().flex_1().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(t.danger).child(title)))
-                .child(div().text_size(px(11.5)).text_color(t.ink_muted).child(i18n::t!("app.work.message_kept")))
+                .child(div().flex().items_center().gap(px(6.)).child(icon(IconName::TriangleAlert, 14., t.danger)).child(div().flex_1().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(t.danger).child(title)))
+                .child(div().text_size(px(12.)).text_color(t.ink_muted).child(i18n::t!("app.work.message_kept")))
                 .when(!tail.trim().is_empty(), |d| d.child(div().id("failure-output").max_h(px(180.)).overflow_y_scroll().p(px(8.)).rounded(px(6.)).bg(t.canvas).font_family(MONO).text_size(px(11.)).line_height(px(15.)).child(tail)))
                 .child(
                     div()
@@ -403,7 +403,7 @@ impl RamaApp {
                     .items_center()
                     .gap(px(8.))
                     .child(Spinner::new().small().color(t.accent))
-                    .child(div().min_w_0().truncate().font_family(MONO).text_size(px(11.5)).text_color(t.ink_muted).child(j.command.clone()))
+                    .child(div().min_w_0().truncate().font_family(MONO).text_size(px(12.)).text_color(t.ink_muted).child(j.command.clone()))
                     .child(div().flex_none().text_color(t.ink_muted).child(format!("{:.0} s", j.started.elapsed().as_secs_f32())))
                     .child(ui::outline_button(t, "cancel-job").h(px(24.)).px(px(8.)).text_size(px(12.)).child(i18n::t!("app.git.cancel")).on_click(cx.listener(|this, _, _, cx| this.cancel_job(cx))))
             }))
@@ -438,7 +438,7 @@ impl RamaApp {
                         .map(|i| {
                             let l = &lines[i];
                             let cmd = l.starts_with("$ ");
-                            div().id(("out", i)).h(px(17.)).px(px(10.)).whitespace_nowrap().overflow_hidden().font_family(MONO).text_size(px(11.5)).text_color(if cmd { t.accent } else { t.ink }).child(l.replace('\t', "    ")).into_any_element()
+                            div().id(("out", i)).h(px(17.)).px(px(10.)).whitespace_nowrap().overflow_hidden().font_family(MONO).text_size(px(12.)).text_color(if cmd { t.accent } else { t.ink }).child(l.replace('\t', "    ")).into_any_element()
                         })
                         .collect::<Vec<_>>()
                 }),
@@ -469,11 +469,11 @@ impl RamaApp {
                 .h(px(32.))
                 .px(px(if compact { 8. } else { 10. }))
                 .gap(px(if compact { 4. } else { 6. }))
-                .text_size(px(12.5))
+                .text_size(px(13.))
                 .when(spinning, |d| d.child(Spinner::new().small().color(t.accent)))
                 .when(!spinning, |d| d.child(icon(ic, 14., if enabled { t.ink } else { t.ink_muted })))
                 .when(!compact, |d| d.child(label))
-                .children(count.map(|c| div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(t.accent).child(c)))
+                .children(count.map(|c| div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(t.accent).child(c)))
                 .when(!enabled, |d| d.opacity(0.55).cursor_default())
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         };
@@ -483,7 +483,7 @@ impl RamaApp {
             .h(px(32.))
             .px(px(if compact { 8. } else { 10. }))
             .gap(px(if compact { 4. } else { 6. }))
-            .text_size(px(12.5))
+            .text_size(px(13.))
             .when(wip_on, |d| d.border_color(t.accent).bg(t.accent_soft))
             .child(icon(IconName::File, 14., t.ink))
             .when(!compact, |d| d.child(i18n::t!("app.topbar.changes")))
@@ -536,7 +536,7 @@ impl RamaApp {
                         .items_center()
                         .gap(px(6.))
                         .child(icon(IconName::TriangleAlert, 14., t.danger))
-                        .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(t.danger).child(title))
+                        .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(t.danger).child(title))
                         .child(div().id("show-op-output").flex_none().text_size(px(12.)).text_color(accent).cursor_pointer().hover(|s| s.underline()).child(i18n::t!("app.git.show_output")).on_click(cx.listener(|this, _, _, cx| {
                             this.work.output_open = true;
                             cx.notify();
@@ -655,7 +655,7 @@ impl RamaApp {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(gpui::black().opacity(if t.dark { 0.55 } else { 0.32 }))
+                .bg(t.backdrop)
                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| close(this, cx)))
                 .child(card)
                 .into_any_element(),

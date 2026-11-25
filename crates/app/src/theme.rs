@@ -1,83 +1,37 @@
-//! Design tokens (same family as genealogy-rs and diskmap) plus the branch lane palette.
-use gpui::{App, Hsla, rgb};
-use gpui_component::ActiveTheme;
+//! The family's tokens come from otherwise-ui (github.com/otherwisetech/otherwise-ui, by tag):
+//! Inter, the type scale, the warm neutrals and status colours, with Rama's violet accent
+//! (`otherwise_ui::accents::RAMA`, set in main.rs). `Tokens` derefs to `otherwise_ui::Theme`
+//! (so `&Tokens` passes wherever the crate wants `&Theme`) and adds the content's own colours:
+//! the diff's added / removed lines, tags and the branch lane palette.
+use gpui::{App, Hsla, Window};
+use otherwise_ui::theme::{hex as c, hex_a as a};
+pub use otherwise_ui::tokens::{MONO, SANS};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Tokens {
-    pub canvas: Hsla,
-    pub surface: Hsla,
-    pub border: Hsla,
-    pub border_strong: Hsla,
-    pub ink: Hsla,
-    pub ink_muted: Hsla,
-    pub accent: Hsla,
-    pub accent_soft: Hsla,
-    pub danger: Hsla,
+    pub ui: otherwise_ui::Theme,
     pub added_bg: Hsla,
     pub removed_bg: Hsla,
     pub added: Hsla,
     pub removed: Hsla,
+    /// tags and the "swapped" badge (the family's warn amber)
     pub tag: Hsla,
-    /// logo badge background (the icon's violet)
-    pub brand: Hsla,
-    pub dark: bool,
 }
 
-fn c(hex: u32) -> Hsla {
-    rgb(hex).into()
-}
-
-fn a(hex: u32, alpha: f32) -> Hsla {
-    let mut h = c(hex);
-    h.a = alpha;
-    h
+impl std::ops::Deref for Tokens {
+    type Target = otherwise_ui::Theme;
+    fn deref(&self) -> &otherwise_ui::Theme {
+        &self.ui
+    }
 }
 
 impl Tokens {
-    pub fn light() -> Self {
-        Tokens {
-            canvas: c(0xF2F1EE),
-            surface: c(0xFFFFFF),
-            border: c(0xE2DFD8),
-            border_strong: c(0xC9C5BB),
-            ink: c(0x1C1B19),
-            ink_muted: c(0x6B675F),
-            accent: c(0x5B4B9A),
-            accent_soft: c(0xECE8F7),
-            danger: c(0xA3382A),
-            added_bg: a(0x2E9E5B, 0.12),
-            removed_bg: a(0xD0503F, 0.12),
-            added: c(0x1F7A44),
-            removed: c(0xB03A2C),
-            tag: c(0xA86A12),
-            brand: c(0x5B4B9A),
-            dark: false,
+    pub fn new(ui: otherwise_ui::Theme) -> Self {
+        if ui.dark {
+            Tokens { ui, added_bg: a(0x3FBF74, 0.14), removed_bg: a(0xE5675A, 0.14), added: c(0x6FD39A), removed: c(0xF08A7E), tag: ui.warn }
+        } else {
+            Tokens { ui, added_bg: a(0x2E9E5B, 0.12), removed_bg: a(0xD0503F, 0.12), added: c(0x1F7A44), removed: c(0xB03A2C), tag: ui.warn }
         }
-    }
-
-    pub fn dark() -> Self {
-        Tokens {
-            canvas: c(0x141413),
-            surface: c(0x1C1B1A),
-            border: c(0x302E2B),
-            border_strong: c(0x4A4741),
-            ink: c(0xF2F0EA),
-            ink_muted: c(0xA19C93),
-            accent: c(0x9D8CE0),
-            accent_soft: a(0x7B68C8, 0.22),
-            danger: c(0xD0604F),
-            added_bg: a(0x3FBF74, 0.14),
-            removed_bg: a(0xE5675A, 0.14),
-            added: c(0x6FD39A),
-            removed: c(0xF08A7E),
-            tag: c(0xE0B04D),
-            brand: c(0x6B5AAE),
-            dark: true,
-        }
-    }
-
-    pub fn on_fill(&self) -> Hsla {
-        if self.dark { c(0x141413) } else { c(0xFFFFFF) }
     }
 
     /// Colour of a branch lane.
@@ -92,13 +46,10 @@ impl Tokens {
 }
 
 pub fn tokens(cx: &App) -> Tokens {
-    if cx.theme().mode.is_dark() { Tokens::dark() } else { Tokens::light() }
+    Tokens::new(otherwise_ui::theme(cx))
 }
 
-pub const SANS: &str = "Inter";
-#[cfg(target_os = "macos")]
-pub const MONO: &str = "Menlo";
-#[cfg(target_os = "windows")]
-pub const MONO: &str = "Consolas";
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub const MONO: &str = "DejaVu Sans Mono";
+/// Follows the system's light / dark appearance and sets the family font on gpui-component.
+pub fn apply(window: Option<&mut Window>, cx: &mut App) {
+    otherwise_ui::apply(otherwise_ui::Appearance::System, window, cx);
+}

@@ -5612,6 +5612,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "otherwise-ui"
+version = "0.1.2"
+source = "git+https://github.com/otherwisetech/otherwise-ui?tag=v0.1.2#98915b07b17addb3ba945fc35d85a66eb43a7364"
+dependencies = [
+ "gpui",
+ "gpui-component",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6154,7 +6163,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rama-app"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6166,6 +6175,7 @@ dependencies = [
  "notify",
  "objc",
  "otherwise-link",
+ "otherwise-ui",
  "rama-graph",
  "rama-i18n",
  "rama-repo",
@@ -6178,15 +6188,15 @@ dependencies = [
 
 [[package]]
 name = "rama-graph"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "rama-i18n"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "rama-repo"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "gix",
  "libc",

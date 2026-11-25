@@ -219,20 +219,20 @@ impl RamaApp {
             }
             cx.notify();
         };
-        let text = |s: String| div().text_size(px(12.5)).line_height(px(18.)).text_color(t.ink_muted).child(s);
+        let text = |s: String| div().text_size(px(13.)).line_height(px(18.)).text_color(t.ink_muted).child(s);
         let mut body = div().flex().flex_col().gap(px(12.));
         let main = self.map.list().and_then(|l| l.first()).map(|m| m.wt.path.clone());
-        let small = |s: String| div().text_size(px(11.5)).line_height(px(16.)).text_color(t.ink_muted).child(s);
+        let small = |s: String| div().text_size(px(12.)).line_height(px(16.)).text_color(t.ink_muted).child(s);
         let footer_ok: Option<AnyElement>;
         if let Some(rep) = &d.report {
             match rep {
-                Err(e) => body = body.child(div().text_size(px(12.5)).text_color(t.danger).child(e.clone())),
+                Err(e) => body = body.child(div().text_size(px(13.)).text_color(t.danger).child(e.clone())),
                 Ok(r) => {
                     body = body.child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(i18n::t!("app.reclaim.freed", size = bytes(r.freed))));
                     for (w, files) in &r.kept_in_trash {
                         let name = w.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                         body = body.child(text(i18n::tn!("app.reclaim.kept_in_trash", files.len() as i64, name = name)));
-                        body = body.child(div().p(px(8.)).rounded(px(6.)).bg(t.canvas).font_family(MONO).text_size(px(11.5)).line_height(px(16.)).children(files.iter().map(|f| div().child(f.clone()))));
+                        body = body.child(div().p(px(8.)).rounded(px(6.)).bg(t.canvas).font_family(MONO).text_size(px(12.)).line_height(px(16.)).children(files.iter().map(|f| div().child(f.clone()))));
                     }
                     if !r.branches_deleted.is_empty() {
                         body = body.child(text(i18n::tn!("app.reclaim.branches_deleted", r.branches_deleted.len() as i64, names = r.branches_deleted.join(", "))));
@@ -304,16 +304,16 @@ impl RamaApp {
                                 .flex()
                                 .flex_col()
                                 .child(div().font_family(MONO).text_size(px(11.)).line_height(px(15.)).text_color(t.ink_muted).child(format!("{:>9}  {}", bytes(*b), p.display()))) // i18n-ok: size and path
-                                .child(div().text_size(px(11.5)).line_height(px(16.)).child(div().font_weight(FontWeight::MEDIUM).child(cat)).child(div().text_color(t.ink_muted).child(what))),
+                                .child(div().text_size(px(12.)).line_height(px(16.)).child(div().font_weight(FontWeight::MEDIUM).child(cat)).child(div().text_color(t.ink_muted).child(what))),
                         );
                     }
                     if kind == ReclaimKind::MergedWorktree {
                         match d.keepers.get(&s.owner) {
                             None => detail = detail.child(small(i18n::t!("app.reclaim.keepers_loading"))),
-                            Some(None) => detail = detail.child(div().text_size(px(11.5)).text_color(t.danger).child(i18n::t!("app.reclaim.keepers_unknown"))),
+                            Some(None) => detail = detail.child(div().text_size(px(12.)).text_color(t.danger).child(i18n::t!("app.reclaim.keepers_unknown"))),
                             Some(Some(k)) if k.is_empty() => detail = detail.child(small(i18n::t!("app.reclaim.keepers_none"))),
                             Some(Some(k)) => {
-                                detail = detail.child(div().text_size(px(11.5)).line_height(px(16.)).text_color(t.danger).child(i18n::tn!("app.reclaim.keepers", k.len() as i64))).child(div().font_family(MONO).text_size(px(11.)).line_height(px(15.)).children(k.iter().map(|f| div().child(f.clone()))));
+                                detail = detail.child(div().text_size(px(12.)).line_height(px(16.)).text_color(t.danger).child(i18n::tn!("app.reclaim.keepers", k.len() as i64))).child(div().font_family(MONO).text_size(px(11.)).line_height(px(15.)).children(k.iter().map(|f| div().child(f.clone()))));
                             }
                         }
                     }
@@ -322,7 +322,7 @@ impl RamaApp {
                             .flex()
                             .flex_col()
                             .gap(px(3.))
-                            .child(div().flex().items_center().gap(px(8.)).child(lead).child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).child(label)).when_some(s.branch.as_ref(), |d, b| d.child(div().flex_none().text_size(px(11.)).font_family(MONO).text_color(t.ink_muted).child(b.clone()))).child(div().flex_none().text_size(px(12.5)).child(bytes(s.bytes))))
+                            .child(div().flex().items_center().gap(px(8.)).child(lead).child(div().flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(label)).when_some(s.branch.as_ref(), |d, b| d.child(div().flex_none().text_size(px(11.)).font_family(MONO).text_color(t.ink_muted).child(b.clone()))).child(div().flex_none().text_size(px(13.)).child(bytes(s.bytes))))
                             .child(detail),
                     );
                 }
