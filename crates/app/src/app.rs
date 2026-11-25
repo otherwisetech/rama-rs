@@ -7,7 +7,7 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::input::{Input, InputEvent, InputState, TextareaState};
-use gpui_component::{IconName, Sizable as _, Theme};
+use gpui_component::{IconName, Sizable as _};
 use crate::work::Work;
 use repo::{DiffLine, FileChange, History, Oid, RefKind, Repo, WorkFile};
 use std::collections::{HashMap, HashSet};
@@ -62,8 +62,7 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 pub(crate) fn sync_theme(window: Option<&mut Window>, cx: &mut App) {
-    Theme::sync_system_appearance(window, cx);
-    Theme::global_mut(cx).font_family = SANS.into();
+    crate::theme::apply(window, cx);
 }
 
 pub enum Phase {
@@ -646,56 +645,53 @@ impl RamaApp {
     fn render_topbar(&self, t: &Tokens, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let bar = topbar_mode(width);
         let ready = matches!(self.phase, Phase::Ready);
+        // the view switch never shrinks; the branch pill truncates instead
         let mut left = div().flex().items_center().gap(px(10.)).min_w_0().flex_shrink_1();
-        left = left.child(div().flex().flex_none().items_center().justify_center().size(px(30.)).rounded(px(8.)).bg(t.brand).child(svg().path(crate::LOGO_SVG).size(px(17.)).text_color(gpui::white())));
-        match (&self.repo, &self.history, &self.phase) {
-            (Some(repo), Some(h), Phase::Ready) => {
-                let branch = h.head_branch.clone().unwrap_or_else(|| i18n::t!("app.topbar.detached", sha = h.head.map(|id| id.to_hex_with_len(7).to_string()).unwrap_or_default()));
-                let tip = (branch.clone(), Self::commit_count(h));
-                let muted = t.ink_muted;
-                // the view switch never shrinks; the repo name and the branch truncate instead
-                left = left
-                    .child(div().min_w(px(40.)).flex_shrink_1().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).truncate().child(repo.name()))
-                    .child(self.render_view_toggle(t, cx))
-                    .child(
-                        div()
-                            .id("branch-pill")
-                            .cursor_pointer()
-                            .hover(|s| s.opacity(0.85))
-                            .on_click(cx.listener(|this, _, window, cx| this.open_branch_picker(window, cx)))
-                            .flex()
-                            .flex_shrink_1()
-                            .min_w(px(64.))
-                            .items_center()
-                            .gap(px(5.))
-                            .px(px(9.))
-                            .py(px(3.))
-                            .rounded_full()
-                            .bg(t.accent_soft)
-                            .text_color(t.accent)
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(ui::branch_icon(12., t.accent))
-                            .child(div().min_w_0().truncate().child(branch))
-                            .child(div().flex_none().child("▾")) // i18n-ok: symbol
-                            .tooltip(move |window, cx| {
-                                let (b, n) = tip.clone();
-                                gpui_component::tooltip::Tooltip::element(move |_, _| div().flex().flex_col().child(b.clone()).child(div().text_color(muted).child(n.clone())).child(div().text_color(muted).child(i18n::t!("app.swap.pill_tip")))).build(window, cx)
-                            }),
-                    );
-                if let Some(with) = self.swapped_with(&repo.root()) {
-                    let here = repo.root();
-                    let label = i18n::t!("app.swap.flag_swapped", name = self.checkout_name(&with));
-                    left = left.child(div().id("swap-badge").flex_none().cursor_pointer().hover(|s| s.opacity(0.85)).px(px(8.)).py(px(3.)).rounded_full().bg(t.tag.opacity(0.16)).text_color(t.tag).text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(label).tooltip(|window, cx| gpui_component::tooltip::Tooltip::new(i18n::t!("app.swap.go_back")).build(window, cx)).on_click(cx.listener(move |this, _, _, cx| this.ask_swap(with.clone(), here.clone(), cx))));
-                }
+        let mut title = crate::APP_NAME.to_string();
+        if let (Some(repo), Some(h), Phase::Ready) = (&self.repo, &self.history, &self.phase) {
+            let branch = h.head_branch.clone().unwrap_or_else(|| i18n::t!("app.topbar.detached", sha = h.head.map(|id| id.to_hex_with_len(7).to_string()).unwrap_or_default()));
+            let tip = (branch.clone(), Self::commit_count(h));
+            let muted = t.ink_muted;
+            title = repo.name();
+            left = left
+                .child(self.render_view_toggle(t, cx))
+                .child(
+                    div()
+                        .id("branch-pill")
+                        .cursor_pointer()
+                        .hover(|s| s.opacity(0.85))
+                        .on_click(cx.listener(|this, _, window, cx| this.open_branch_picker(window, cx)))
+                        .flex()
+                        .flex_shrink_1()
+                        .min_w(px(64.))
+                        .items_center()
+                        .gap(px(5.))
+                        .px(px(9.))
+                        .py(px(3.))
+                        .rounded_full()
+                        .bg(t.accent_soft)
+                        .text_color(t.accent)
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(ui::branch_icon(12., t.accent))
+                        .child(div().min_w_0().truncate().child(branch))
+                        .child(div().flex_none().child("▾")) // i18n-ok: symbol
+                        .tooltip(move |window, cx| {
+                            let (b, n) = tip.clone();
+                            gpui_component::tooltip::Tooltip::element(move |_, _| div().flex().flex_col().child(b.clone()).child(div().text_color(muted).child(n.clone())).child(div().text_color(muted).child(i18n::t!("app.swap.pill_tip")))).build(window, cx)
+                        }),
+                );
+            if let Some(with) = self.swapped_with(&repo.root()) {
+                let here = repo.root();
+                let label = i18n::t!("app.swap.flag_swapped", name = self.checkout_name(&with));
+                left = left.child(div().id("swap-badge").flex_none().cursor_pointer().hover(|s| s.opacity(0.85)).px(px(8.)).py(px(3.)).rounded_full().bg(t.tag.opacity(0.16)).text_color(t.tag).text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(label).tooltip(|window, cx| gpui_component::tooltip::Tooltip::new(i18n::t!("app.swap.go_back")).build(window, cx)).on_click(cx.listener(move |this, _, _, cx| this.ask_swap(with.clone(), here.clone(), cx))));
             }
-            _ => left = left.child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(crate::APP_NAME)),
         }
         let can_reload = matches!(self.phase, Phase::Ready | Phase::Failed { .. });
         let current = i18n::locale();
         let weak = cx.entity().downgrade();
         let stars_on = crate::star::enabled(cx);
-        let lang = Button::new("lang").ghost().icon(IconName::Globe).with_size(px(34.)).tooltip(i18n::t!("common.language")).dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+        let lang = Button::new("lang").ghost().icon(IconName::Globe).with_size(px(otherwise_ui::tokens::size::CONTROL)).tooltip(i18n::t!("common.language")).dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
             menu = menu.label(i18n::t!("common.language"));
             for (code, name) in i18n::available() {
                 let w = weak.clone();
@@ -723,53 +719,43 @@ impl RamaApp {
             .when(compact, |d| d.px(px(9.)).tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(open_tip.clone()).build(window, cx)))
             .when(!compact, |d| d.child(i18n::t!("app.topbar.open")))
             .on_click(cx.listener(|this, _, window, cx| this.open_dialog(window, cx)));
-        let tools = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(8.))
-            .child(ui::icon_button(t, "reload", IconName::Redo, can_reload).when(can_reload, |d| d.on_click(cx.listener(|this, _, window, cx| this.reload(window, cx)))))
-            .child(open)
-            .child(lang);
         let one_row = bar != Bar::TwoRows;
-        let row1 = div()
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .h(px(52.))
-            .child(left)
-            .child(div().flex_1())
-            .when(ready && one_row, |d| d.child(self.render_search(t, false, cx)).child(self.render_remote_buttons(t, compact, cx)))
-            .child(tools);
+        let mut header = otherwise_ui::AppHeader::new(otherwise_ui::logo_mark(crate::LOGO_SVG), title).center(left);
+        if ready && one_row {
+            header = header.action(self.render_search(t, false, cx)).action(self.render_remote_buttons(t, compact, cx));
+        }
+        let header = header.action(ui::icon_button(t, "reload", IconName::Redo, can_reload).when(can_reload, |d| d.on_click(cx.listener(|this, _, window, cx| this.reload(window, cx))))).action(open).action(lang);
         div()
             .flex()
             .flex_col()
             .flex_none()
-            .px(px(12.))
-            .border_b_1()
-            .border_color(t.border)
-            .bg(t.surface)
-            .child(row1)
-            .when(ready && !one_row, |d| d.child(div().flex().items_center().gap(px(8.)).pb(px(9.)).child(self.render_search(t, true, cx)).child(self.render_remote_buttons(t, true, cx))))
+            .child(header)
+            .when(ready && !one_row, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(otherwise_ui::tokens::space::S4))
+                        .px(px(otherwise_ui::tokens::space::S8))
+                        .py(px(otherwise_ui::tokens::space::S4))
+                        .border_b_1()
+                        .border_color(t.border)
+                        .bg(t.surface)
+                        .child(self.render_search(t, true, cx))
+                        .child(self.render_remote_buttons(t, true, cx)),
+                )
+            })
     }
 
     /// Graph | Map switch (⌘M).
     fn render_view_toggle(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
         let map = self.map_view;
         let seg = |id: &'static str, ic: IconName, label: String, on: bool| {
-            div().id(id).flex().items_center().gap(px(5.)).h(px(26.)).px(px(9.)).rounded(px(7.)).text_size(px(12.)).cursor_pointer().when(on, |d| d.bg(t.surface).font_weight(FontWeight::SEMIBOLD).shadow_sm()).when(!on, |d| d.text_color(t.ink_muted)).child(icon(ic, 13., if on { t.ink } else { t.ink_muted })).child(label)
+            otherwise_ui::segment(t, id, on).child(icon(ic, 13., if on { t.ink } else { t.ink_muted })).child(label)
         };
         let tip = i18n::t!("app.map.toggle_tip", keys = MAP_KEYS);
-        div()
+        otherwise_ui::segmented(t)
             .id("view-toggle")
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(2.))
-            .ml(px(6.))
-            .p(px(2.))
-            .rounded(px(9.))
-            .bg(t.border.opacity(0.6))
             .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
             .child(seg("view-graph", IconName::GalleryVerticalEnd, i18n::t!("app.map.graph"), !map).on_click(cx.listener(|this, _, _, cx| this.show_map(false, cx))))
             .child(seg("view-map", IconName::Map, i18n::t!("app.map.tab"), map).on_click(cx.listener(|this, _, _, cx| this.show_map(true, cx))))
@@ -911,28 +897,40 @@ impl RamaApp {
         if self.other_apps.is_empty() {
             return None;
         }
-        let rows = self.other_apps.iter().enumerate().map(|(i, (spec, installed))| {
+        // compact chips that wrap, so About keeps its height however many apps are installed
+        let chips = self.other_apps.iter().enumerate().map(|(i, (spec, installed))| {
             let installed = installed.clone();
-            let hover = t.canvas;
+            let hover = t.border_strong;
             div()
                 .id(("about-app", i))
                 .flex()
                 .items_center()
-                .justify_between()
-                .gap(px(10.))
-                .px(px(10.))
-                .py(px(5.))
-                .rounded(px(8.))
+                .gap(px(otherwise_ui::tokens::space::S2))
+                .px(px(otherwise_ui::tokens::space::S4))
+                .py(px(otherwise_ui::tokens::space::S1))
+                .rounded(px(otherwise_ui::tokens::radius::CHIP))
+                .border_1()
+                .border_color(t.border)
+                .text_size(px(otherwise_ui::tokens::text::SMALL))
                 .cursor_pointer()
-                .hover(move |s| s.bg(hover))
-                .child(div().text_size(px(13.)).child(spec.name.clone()))
-                .child(div().text_size(px(11.)).text_color(t.ink_muted).child(installed.version.clone().unwrap_or_default()))
+                .hover(move |s| s.border_color(hover))
+                .child(div().text_color(t.ink).child(spec.name.clone()))
+                .child(div().text_color(t.ink_muted).child(installed.version.clone().unwrap_or_default()))
                 .on_click(move |_, _, _| {
                     let app = installed.clone();
                     std::thread::spawn(move || crate::otherwise::launch(&app));
                 })
         });
-        Some(div().w_full().flex().flex_col().gap(px(4.)).child(div().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(t.ink_muted).child(i18n::t!("app.about.more_apps"))).children(rows))
+        Some(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(otherwise_ui::tokens::space::S3))
+                .child(otherwise_ui::section_title(t, i18n::t!("app.about.more_apps")))
+                .child(div().flex().flex_wrap().justify_center().gap(px(otherwise_ui::tokens::space::S2)).children(chips)),
+        )
     }
 
     /// Slim bar at the bottom of every screen: where you are on the left, About on the right.
@@ -944,99 +942,30 @@ impl RamaApp {
             },
             _ => String::new(),
         };
-        let ink = t.ink;
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(12.))
-            .h(px(26.))
-            .px(px(12.))
-            .border_t_1()
-            .border_color(t.border)
-            .bg(t.surface)
-            .text_size(px(11.))
-            .text_color(t.ink_muted)
-            .child(div().flex_1().min_w_0().truncate().child(left))
-            .when(matches!(self.phase, Phase::Ready), |d| d.child(self.render_output_toggle(t, cx)))
-            .child(crate::star::footer_link(t, cx))
-            .child(
-                div()
-                    .id("footer-about")
-                    .flex_none()
-                    .cursor_pointer()
-                    .hover(move |s| s.text_color(ink).underline())
-                    .child(i18n::t!("app.about.footer", app = crate::APP_NAME, version = crate::VERSION, company = crate::COMPANY))
-                    .on_click(cx.listener(|this, _, _, cx| this.show_about(cx))),
-            )
+        let status = if left.is_empty() { otherwise_ui::privacy_note(t, i18n::t!("app.privacy.local"), None).into_any_element() } else { div().truncate().child(left).into_any_element() };
+        let footer = otherwise_ui::AppFooter::new(crate::APP_NAME, i18n::t!("app.about.footer_link")).version(crate::VERSION).status(status);
+        let footer = if matches!(self.phase, Phase::Ready) { footer.item(self.render_output_toggle(t, cx)) } else { footer };
+        footer.item(crate::star::footer_link(t, cx)).on_about(cx.listener(|this, _, _, cx| this.show_about(cx)))
     }
 
     fn render_about(&self, t: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
-        let accent = t.accent;
-        let card = div()
-            .id("about-card")
-            .relative()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(12.))
-            .w(px(420.))
-            .px(px(32.))
-            .pt(px(32.))
-            .pb(px(26.))
-            .rounded(px(18.))
-            .border_1()
-            .border_color(t.border)
-            .bg(t.surface)
-            .shadow_lg()
-            // clicks inside the card must not reach the backdrop
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(div().absolute().top(px(10.)).right(px(10.)).child(ui::icon_button(t, "about-close", IconName::Close, true).on_click(cx.listener(|this, _, _, cx| {
-                this.about = false;
-                cx.notify();
-            }))))
-            .child(img(self.logo.clone()).size(px(88.)))
-            .child(div().flex().items_baseline().gap(px(8.)).child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(crate::APP_NAME)).child(div().text_size(px(13.)).text_color(t.ink_muted).child(crate::VERSION)))
-            .child(div().text_center().text_size(px(13.)).line_height(px(19.)).text_color(t.ink_muted).child(i18n::t!("app.about.description")))
-            .child(div().w_full().h(px(1.)).my(px(4.)).bg(t.border))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(px(2.))
-                    .child(div().text_size(px(13.)).child(i18n::t!("app.about.by", company = crate::COMPANY)))
-                    .child(div().text_size(px(12.)).text_color(t.ink_muted).child(i18n::t!("app.about.place"))),
-            )
-            .child(ui::filled_button(t, "about-site", t.accent).mt(px(4.)).child(i18n::t!("app.about.visit")).on_click(|_, _, cx| cx.open_url(crate::COMPANY_URL)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(14.))
-                    .child(div().id("about-source").text_size(px(12.)).text_color(accent).cursor_pointer().hover(|s| s.underline()).child(i18n::t!("app.about.source")).on_click(|_, _, cx| cx.open_url(crate::REPO_URL)))
-                    .child(crate::star::about_button(t, cx)),
-            )
-            .child(crate::star::about_ask(t))
-            .child(crate::vcity::about_block(t))
-            .children(self.render_other_apps(t))
-            .child(div().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.about.license")));
-        div()
-            .id("about-backdrop")
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(gpui::black().opacity(if t.dark { 0.55 } else { 0.32 }))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.about = false;
-                    cx.notify();
-                }),
-            )
-            .child(card)
+        let star = div().flex().flex_col().items_center().gap(px(otherwise_ui::tokens::space::S3)).child(crate::star::about_button(t, cx)).child(crate::star::about_ask(t));
+        let about = otherwise_ui::AboutModal::new(crate::APP_NAME, crate::VERSION, i18n::t!("app.about.by", company = crate::COMPANY))
+            .logo(self.logo.clone())
+            .description(i18n::t!("app.about.description"))
+            .place(i18n::t!("app.about.place"))
+            .website(i18n::t!("app.about.visit"), crate::COMPANY_URL)
+            .vcity(i18n::t!("app.vcity.pitch"), crate::vcity::menu_label(), crate::vcity::url(crate::otherwise::APP_ID))
+            .source(i18n::t!("app.about.source"), crate::REPO_URL)
+            .extra(star);
+        let about = match self.render_other_apps(t) {
+            Some(apps) => about.extra(apps),
+            None => about,
+        };
+        about.license(i18n::t!("app.about.license")).on_dismiss(cx.listener(|this, _: &otherwise_ui::Dismiss, _, cx| {
+            this.about = false;
+            cx.notify();
+        }))
     }
 
     fn render_toast(&self, t: &Tokens) -> Option<impl IntoElement> {

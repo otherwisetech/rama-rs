@@ -1,5 +1,5 @@
 //! Where rama keeps its own files: `<data root>/rama/` (`~/.otherwise/rama/` unless the user
-//! moved the root in Otherwise Apps) — settings, recent repositories and small caches (folder sizes, star count). Before 0.4 they were in the
+//! moved the root in Otherwise Hub) — settings, recent repositories and small caches (folder sizes, star count). Before 0.4 they were in the
 //! platform config folder ([`legacy_dir`]); [`migrate_on_startup`] moves them over once, never
 //! overwriting anything.
 use otherwise_link::storage;

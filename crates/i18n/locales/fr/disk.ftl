@@ -73,6 +73,6 @@ app.reclaim.open_diskmap = Ouvrir dans diskmap
 app.reclaim.diskmap_failed = Impossible d’ouvrir diskmap : {detail}
 app.reclaim.set_days = Proposer les dossiers de build après ce nombre de jours sans changement
 app.reclaim.set_days_hint = S’applique à target/, node_modules/, .next/, dist/, build/ et similaires des worktrees sans changement ni commit depuis ce temps.
-app.reclaim.set_today = Signaler dans Aujourd’hui d’Otherwise Apps quand un dépôt peut libérer plus de 10 Go
+app.reclaim.set_today = Signaler dans Aujourd’hui d’Otherwise Hub quand un dépôt peut libérer plus de 10 Go
 app.today.reclaim = {size} peuvent être libérés dans {repo}
 app.today.reclaim_body = Worktrees fusionnés et caches de build ; rama liste chaque chemin et ne déplace rien tant que vous ne l’avez pas choisi et confirmé.

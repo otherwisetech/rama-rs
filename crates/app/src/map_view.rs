@@ -193,11 +193,11 @@ impl RamaApp {
             .items_center()
             .gap(px(2.))
             .child(small("map-zoom-out", IconName::Minus, i18n::t!("app.map.zoom_out")).on_click(cx.listener(|this, _, _, cx| this.map_zoom_key(Some(1. / 1.2), cx))))
-            .child(div().id("map-zoom-reset").w(px(44.)).text_center().text_size(px(11.5)).text_color(t.ink_muted).cursor_pointer().child(format!("{:.0}%", self.map.zoom * 100.)).on_click(cx.listener(|this, _, _, cx| this.map_zoom_key(None, cx))))
+            .child(div().id("map-zoom-reset").w(px(44.)).text_center().text_size(px(12.)).text_color(t.ink_muted).cursor_pointer().child(format!("{:.0}%", self.map.zoom * 100.)).on_click(cx.listener(|this, _, _, cx| this.map_zoom_key(None, cx))))
             .child(small("map-zoom-in", IconName::Plus, i18n::t!("app.map.zoom_in")).on_click(cx.listener(|this, _, _, cx| this.map_zoom_key(Some(1.2), cx))));
         let busy = self.work.job.is_some();
         let btn = |id: &'static str, ic: IconName, label: String| {
-            let b = ui::outline_button(t, id).h(px(30.)).px(px(if compact { 8. } else { 10. })).text_size(px(12.5)).child(icon(ic, 14., t.ink)).when(busy, |d| d.opacity(0.5));
+            let b = ui::outline_button(t, id).h(px(30.)).px(px(if compact { 8. } else { 10. })).text_size(px(13.)).child(icon(ic, 14., t.ink)).when(busy, |d| d.opacity(0.5));
             if compact { b.tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx)) } else { b.child(label) }
         };
         let count = self.map.list().map(|l| i18n::tn!("app.map.count", l.len())).unwrap_or_default();
@@ -515,17 +515,17 @@ impl RamaApp {
                     .px(px(12.))
                     .border_b_1()
                     .border_color(t.border.opacity(0.5))
-                    .text_size(px(12.5))
+                    .text_size(px(13.))
                     .cursor_pointer()
                     .when(selected, |d| d.bg(t.accent_soft))
                     .when(!selected, |d| d.hover(move |s| s.bg(hover)))
                     .when(e.info.merged && !e.wt.main, |d| d.text_color(t.ink_muted))
                     .child(div().flex().flex_1().min_w_0().items_center().gap(px(6.)).child(div().flex_none().size(px(8.)).rounded_full().bg(color)).children(self.agent_badge(t, &e.wt.path, 1.5, ("map-row-agent", k), cx)).child(div().truncate().when(e.wt.main, |d| d.font_weight(FontWeight::SEMIBOLD)).child(if e.wt.main { self.repo.as_ref().map(|r| r.name()).unwrap_or_default() } else { short_path(&e.wt.path, main_path.as_deref()) })))
                     .child(div().flex_none().w(px(200.)).truncate().child(Self::head_label(e)))
-                    .child(div().flex_none().w(px(150.)).truncate().text_size(px(11.5)).text_color(t.ink_muted).child(dist.join(" · "))) // i18n-ok: separator
-                    .child(div().flex_none().w(px(90.)).text_size(px(11.5)).text_color(if changed > 0 { t.accent } else { t.ink_muted }).child(if changed > 0 { i18n::tn!("app.map.changed", changed) } else { i18n::t!("app.wip.clean") }))
-                    .child(div().flex_none().w(px(110.)).text_size(px(11.5)).text_color(t.ink_muted).child(e.info.time.map(|tm| ago(tm, now())).unwrap_or_default()))
-                    .child(div().flex_none().w(px(170.)).truncate().text_size(px(11.5)).text_color(t.ink_muted).child(self.size_text(e).unwrap_or_default()))
+                    .child(div().flex_none().w(px(150.)).truncate().text_size(px(12.)).text_color(t.ink_muted).child(dist.join(" · "))) // i18n-ok: separator
+                    .child(div().flex_none().w(px(90.)).text_size(px(12.)).text_color(if changed > 0 { t.accent } else { t.ink_muted }).child(if changed > 0 { i18n::tn!("app.map.changed", changed) } else { i18n::t!("app.wip.clean") }))
+                    .child(div().flex_none().w(px(110.)).text_size(px(12.)).text_color(t.ink_muted).child(e.info.time.map(|tm| ago(tm, now())).unwrap_or_default()))
+                    .child(div().flex_none().w(px(170.)).truncate().text_size(px(12.)).text_color(t.ink_muted).child(self.size_text(e).unwrap_or_default()))
                     .child(div().flex_none().w(px(140.)).flex().gap(px(3.)).overflow_hidden().children(self.flags(t, e).into_iter().map(|(f, c)| div().flex_none().px(px(5.)).rounded(px(4.)).bg(c.opacity(0.14)).text_color(c).text_size(px(10.)).child(f))))
                     .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                         this.map.selected = Some(path.clone());
@@ -624,15 +624,15 @@ impl RamaApp {
                         .when(prunable > 0, |d| d.child(div().text_size(px(13.)).text_color(t.danger).child(i18n::tn!("app.map.n_prunable", prunable))))
                         .child(div().text_size(px(13.)).text_color(if free > 0 { t.accent } else { t.ink_muted }).child(i18n::t!("app.reclaim.total", size = bytes(free))))
                         .when(shared > 0, |d| d.child(div().text_size(px(12.)).text_color(t.ink_muted).child(i18n::t!("app.reclaim.shared_total", size = bytes(shared)))))
-                        .child(ui::outline_button(t, "totals-reclaim").h(px(30.)).text_size(px(12.5)).child(icon(IconName::HardDrive, 14., t.ink)).child(i18n::t!("app.reclaim.menu")).on_click(cx.listener(|this, _, _, cx| this.open_reclaim(cx))))
-                        .when_some(diskmap, |d, scan| d.child(ui::outline_button(t, "totals-diskmap").h(px(30.)).text_size(px(12.5)).child(icon(IconName::ChartPie, 14., t.ink)).child(i18n::t!("app.reclaim.open_diskmap")).on_click(cx.listener(move |this, _, _, cx| this.open_in_diskmap(scan.clone(), cx)))))
+                        .child(ui::outline_button(t, "totals-reclaim").h(px(30.)).text_size(px(13.)).child(icon(IconName::HardDrive, 14., t.ink)).child(i18n::t!("app.reclaim.menu")).on_click(cx.listener(|this, _, _, cx| this.open_reclaim(cx))))
+                        .when_some(diskmap, |d, scan| d.child(ui::outline_button(t, "totals-diskmap").h(px(30.)).text_size(px(13.)).child(icon(IconName::ChartPie, 14., t.ink)).child(i18n::t!("app.reclaim.open_diskmap")).on_click(cx.listener(move |this, _, _, cx| this.open_in_diskmap(scan.clone(), cx)))))
                         .child(div().pt(px(8.)).text_size(px(12.)).line_height(px(17.)).text_color(t.ink_muted).child(i18n::t!("app.map.select_hint"))),
                 )
                 .into_any_element();
         };
         let main_path = list.first().map(|m| m.wt.path.clone());
         let busy = self.work.job.is_some();
-        let kv = |k: String, v: String| div().flex().flex_col().gap(px(2.)).child(div().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(t.ink_muted).child(k)).child(div().text_size(px(12.5)).line_height(px(17.)).child(v));
+        let kv = |k: String, v: String| div().flex().flex_col().gap(px(2.)).child(div().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(t.ink_muted).child(k)).child(div().text_size(px(13.)).line_height(px(17.)).child(v));
         let mut info = div().flex().flex_col().gap(px(10.)).p(px(16.)).border_b_1().border_color(t.border);
         info = info
             .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).line_height(px(20.)).child(if e.wt.main { self.repo.as_ref().map(|r| r.name()).unwrap_or_default() } else { short_path(&e.wt.path, main_path.as_deref()) }))
@@ -667,15 +667,15 @@ impl RamaApp {
         }
         info = info.child(kv(i18n::t!("app.map.col_changes"), if changed > 0 { i18n::tn!("app.map.changed", changed) } else { i18n::t!("app.wip.clean") }));
         if !uniq.is_empty() {
-            info = info.child(div().flex().flex_col().text_size(px(11.5)).font_family(MONO).text_color(t.ink_muted).children(uniq.iter().take(12).map(|f| div().truncate().child(f.clone()))).when(uniq.len() > 12, |d| d.child(div().child(i18n::tn!("app.work.more", uniq.len() - 12)))));
+            info = info.child(div().flex().flex_col().text_size(px(12.)).font_family(MONO).text_color(t.ink_muted).children(uniq.iter().take(12).map(|f| div().truncate().child(f.clone()))).when(uniq.len() > 12, |d| d.child(div().child(i18n::tn!("app.work.more", uniq.len() - 12)))));
         }
         let size: AnyElement = match self.map.usage(&e.wt.path) {
             Some(u) => div()
                 .flex()
                 .flex_col()
                 .gap(px(2.))
-                .child(div().text_size(px(12.5)).child(bytes(u.total)))
-                .children(u.parts.iter().map(|(n, b)| div().flex().text_size(px(11.5)).text_color(t.ink_muted).child(div().flex_1().font_family(MONO).child(n.clone())).child(bytes(*b))))
+                .child(div().text_size(px(13.)).child(bytes(u.total)))
+                .children(u.parts.iter().map(|(n, b)| div().flex().text_size(px(12.)).text_color(t.ink_muted).child(div().flex_1().font_family(MONO).child(n.clone())).child(bytes(*b))))
                 .into_any_element(),
             None if self.map.measuring(&e.wt.path) => div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(t.ink_muted).child(Spinner::new().small().color(t.accent)).child(i18n::t!("app.map.measuring")).into_any_element(),
             None => div().into_any_element(),
@@ -687,7 +687,7 @@ impl RamaApp {
         }
 
         let path = e.wt.path.clone();
-        let action = |id: &'static str, ic: IconName, label: String, enabled: bool| ui::outline_button(t, id).w_full().h(px(30.)).text_size(px(12.5)).child(icon(ic, 14., t.ink)).child(label).when(!enabled, |d| d.opacity(0.45).cursor_default());
+        let action = |id: &'static str, ic: IconName, label: String, enabled: bool| ui::outline_button(t, id).w_full().h(px(30.)).text_size(px(13.)).child(icon(ic, 14., t.ink)).child(label).when(!enabled, |d| d.opacity(0.45).cursor_default());
         let mut actions = div().flex().flex_col().gap(px(6.)).p(px(16.));
         let missing = e.wt.prunable.is_some();
         let p = path.clone();
@@ -867,7 +867,7 @@ impl RamaApp {
             }
             Dialog::Settings(f) => {
                 let label = |s: String| div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(s);
-                let hint = |s: String| div().text_size(px(11.5)).text_color(t.ink_muted).child(s);
+                let hint = |s: String| div().text_size(px(12.)).text_color(t.ink_muted).child(s);
                 let terms = self.map.terminals.clone();
                 let cur = f.terminal.clone();
                 let picked = crate::launch::pick_terminal(cur.as_deref(), &terms);

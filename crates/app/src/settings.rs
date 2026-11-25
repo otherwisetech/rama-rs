@@ -29,7 +29,7 @@ pub struct Settings {
     pub reduce_motion: Option<String>,
     /// `"on"`: a system notification when an agent starts needing you.
     pub agent_notify: Option<String>,
-    /// `"off"`: don't list agents that need you in Otherwise Apps' Today.
+    /// `"off"`: don't list agents that need you in Otherwise Hub's Today.
     pub agent_today: Option<String>,
     /// `"off"`: don't fetch the repo's star count from api.github.com.
     pub github_stars: Option<String>,

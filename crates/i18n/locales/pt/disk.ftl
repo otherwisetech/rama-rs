@@ -73,6 +73,6 @@ app.reclaim.open_diskmap = Abrir no diskmap
 app.reclaim.diskmap_failed = Não foi possível abrir o diskmap: {detail}
 app.reclaim.set_days = Oferecer pastas de build após estes dias sem mudanças
 app.reclaim.set_days_hint = Vale para target/, node_modules/, .next/, dist/, build/ e similares de worktrees sem mudanças nem commits nesse tempo.
-app.reclaim.set_today = Avisar no Hoje do Otherwise Apps quando um repositório puder liberar mais de 10 GB
+app.reclaim.set_today = Avisar no Hoje do Otherwise Hub quando um repositório puder liberar mais de 10 GB
 app.today.reclaim = {size} podem ser liberados em {repo}
 app.today.reclaim_body = Worktrees mesclados e caches de build; o rama lista cada caminho e não move nada até você escolher e confirmar.

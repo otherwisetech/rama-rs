@@ -406,7 +406,7 @@ impl RamaApp {
                         .flex()
                         .items_center()
                         .gap(px(10.))
-                        .child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(t.ink_muted).child(sub))
+                        .child(div().flex_1().min_w_0().text_size(px(13.)).text_color(t.ink_muted).child(sub))
                         .children(progress.map(|p| div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(t.ink_muted).child(Spinner::new().small().color(t.accent)).child(p)))
                         .child(fetch),
                 );
@@ -469,7 +469,7 @@ impl RamaApp {
                         body = body.child(div().text_size(px(13.)).text_color(t.danger).child(i18n::t!("app.clean.remote_failed", names = rep.remote_failed.join(", "))));
                     }
                     for (name, err) in &rep.failed {
-                        body = body.child(div().text_size(px(12.5)).text_color(t.danger).child(i18n::t!("app.clean.failed", name = name, detail = err.lines().last().unwrap_or_default())));
+                        body = body.child(div().text_size(px(13.)).text_color(t.danger).child(i18n::t!("app.clean.failed", name = name, detail = err.lines().last().unwrap_or_default())));
                     }
                 }
                 body = body.child(self.disk_note(t, cx)).child(self.undo_list(t, cx));
@@ -568,7 +568,7 @@ impl RamaApp {
                     .when(r.c.gone && !matches!(r.c.reason, Reason::Gone), |d| d.child(chip(i18n::t!("app.clean.reason_gone"), t.tag)))
                     .when(r.c.needs_force, |d| d.child(chip("-D".into(), t.danger))) // i18n-ok: flag
                     .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(t.ink_muted).child(r.c.subject.clone()))
-                    .child(div().flex_none().text_size(px(11.5)).text_color(t.ink_muted).child(ago(r.c.time, now()))),
+                    .child(div().flex_none().text_size(px(12.)).text_color(t.ink_muted).child(ago(r.c.time, now()))),
             );
         if let Some(wt) = &r.c.worktree {
             let dirty = r.wt_dirty.unwrap_or(usize::MAX);
@@ -582,7 +582,7 @@ impl RamaApp {
                     .items_center()
                     .gap(px(8.))
                     .pl(px(26.))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(11.5)).text_color(if dirty > 0 && dirty != usize::MAX { t.danger } else { t.ink_muted }).child(note))
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(if dirty > 0 && dirty != usize::MAX { t.danger } else { t.ink_muted }).child(note))
                     .when(dirty == 0, |d| {
                         d.child(Checkbox::new(("clean-wt", i)).small().label(i18n::t!("app.clean.also_worktree")).checked(r.remove_wt).on_click(cx.listener(move |this, on: &bool, _, cx| {
                             if let Some(row) = this.cleanup.as_mut().and_then(|c| c.rows.get_mut(i)) {
@@ -612,7 +612,7 @@ impl RamaApp {
             .p(px(12.))
             .rounded(px(10.))
             .bg(t.canvas)
-            .child(div().flex().items_center().gap(px(6.)).child(icon(IconName::HardDrive, 14., t.ink_muted)).child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).child(i18n::t!("app.clean.disk_title"))))
+            .child(div().flex().items_center().gap(px(6.)).child(icon(IconName::HardDrive, 14., t.ink_muted)).child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(i18n::t!("app.clean.disk_title"))))
             .child(div().text_size(px(12.)).line_height(px(17.)).text_color(t.ink_muted).child(i18n::t!("app.clean.disk_body")))
             .child(
                 div()
@@ -652,7 +652,7 @@ impl RamaApp {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .text_size(px(12.5))
+                    .text_size(px(13.))
                     .child(div().flex_1().min_w_0().truncate().child(name.clone()))
                     .child(div().font_family(MONO).text_size(px(11.)).text_color(t.ink_muted).child(oid.to_hex_with_len(10).to_string()))
                     .child(ui::outline_button(t, ("undo", i)).h(px(24.)).px(px(8.)).text_size(px(12.)).child(i18n::t!("app.clean.restore")).when(busy, |d| d.opacity(0.5)).when(!busy, |d| d.on_click(cx.listener(move |this, _, _, cx| this.run_op(Op::RestoreBranch { name: n.clone(), oid: o }, cx))))),
@@ -692,9 +692,9 @@ fn merge_rows(old: &[Row], new: Vec<Row>) -> Vec<Row> {
 }
 
 pub fn code_block(t: &Tokens, id: &'static str, text: String) -> Stateful<Div> {
-    div().id(id).max_h(px(160.)).overflow_y_scroll().p(px(8.)).rounded(px(6.)).bg(t.canvas).font_family(MONO).text_size(px(11.5)).line_height(px(16.)).child(text)
+    div().id(id).max_h(px(160.)).overflow_y_scroll().p(px(8.)).rounded(px(6.)).bg(t.canvas).font_family(MONO).text_size(px(12.)).line_height(px(16.)).child(text)
 }
 
 pub fn backdrop(t: &Tokens, id: &'static str) -> Stateful<Div> {
-    div().id(id).absolute().inset_0().flex().items_center().justify_center().bg(gpui::black().opacity(if t.dark { 0.55 } else { 0.32 }))
+    div().id(id).absolute().inset_0().flex().items_center().justify_center().bg(t.backdrop)
 }

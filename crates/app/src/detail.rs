@@ -172,7 +172,7 @@ pub(crate) fn file_row(t: &Tokens, i: usize, f: &FileChange, open: bool, cx: &mu
         .when(open, |d| d.bg(t.accent_soft))
         .when(!open, |d| d.hover(move |s| s.bg(hover)))
         .child(div().flex().flex_none().items_center().justify_center().size(px(16.)).rounded(px(4.)).bg(sc.opacity(0.16)).text_color(sc).text_size(px(10.)).font_weight(FontWeight::BOLD).child(status_letter(&f.status)))
-        .child(div().flex().flex_1().min_w_0().text_size(px(12.5)).child(div().flex_none().text_color(t.ink).child(name)).child(div().min_w_0().truncate().pl(px(6.)).text_color(t.ink_muted).child(dir)))
+        .child(div().flex().flex_1().min_w_0().text_size(px(13.)).child(div().flex_none().text_color(t.ink).child(name)).child(div().min_w_0().truncate().pl(px(6.)).text_color(t.ink_muted).child(dir)))
         .when(f.binary, |d| d.child(div().flex_none().text_size(px(11.)).text_color(t.ink_muted).child(i18n::t!("app.detail.binary"))))
         .when(!f.binary, |d| d.child(div().flex_none().flex().gap(px(6.)).text_size(px(11.)).child(div().text_color(t.added).child(format!("+{}", f.added))).child(div().text_color(t.removed).child(format!("−{}", f.removed)))))
         .on_click(cx.listener(move |this, _, _, cx| this.open_diff(file.clone(), cx)))

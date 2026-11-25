@@ -1,5 +1,5 @@
 //! otherwise-link: `otherwise-rama://` links in, other Otherwise apps in About, agents that
-//! wait for you and repositories with a lot of space to free in Otherwise Apps' Today view,
+//! wait for you and repositories with a lot of space to free in Otherwise Hub's Today view,
 //! and "Open in diskmap".
 use crate::agents::{Agent, AgentState, ErrKind, Found, Need};
 use otherwise_link::apps::{self, AppSpec, Installed, Locations};
@@ -67,7 +67,7 @@ pub fn diskmap_installed() -> bool {
     apps::known("diskmap").is_some_and(|k| apps::detect(&k.spec(), &Locations::system()).is_some()) // i18n-ok: app id
 }
 
-/// Opens diskmap on `path` (its own scheme, else through Otherwise Apps).
+/// Opens diskmap on `path` (its own scheme, else through Otherwise Hub).
 pub fn open_in_diskmap(path: &Path) -> std::io::Result<()> {
     otherwise_link::open::open_link(&diskmap_link(path)).map(|_| ())
 }

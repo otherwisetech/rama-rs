@@ -188,7 +188,7 @@ impl RamaApp {
             .border_color(if filtering { t.accent } else { t.border })
             .bg(t.canvas)
             .child(icon(IconName::Search, 13., t.ink_muted))
-            .child(div().flex_1().min_w_0().text_size(px(12.5)).child(Input::new(&self.side_search).appearance(false).small()))
+            .child(div().flex_1().min_w_0().text_size(px(13.)).child(Input::new(&self.side_search).appearance(false).small()))
             .children(clear)
             .child(sort);
         div()
@@ -286,7 +286,7 @@ impl RamaApp {
                     .when(on, |d| d.bg(t.accent_soft))
                     .when(!on, |d| d.hover(move |s| s.bg(hover)))
                     .child(icon(IconName::Inbox, 12., t.ink_muted).flex_none())
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).child(highlighted(t, &st.message, ranges)))
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).child(highlighted(t, &st.message, ranges)))
                     .on_click(cx.listener(move |this, _, _, cx| this.select_stash(i, cx)))
                     .context_menu(move |menu, _, _| {
                         let item = |label: String, f: fn(&mut RamaApp, usize, &mut Context<RamaApp>)| {
@@ -349,7 +349,7 @@ impl RamaApp {
                     .when(on_selected, |d| d.bg(t.accent_soft))
                     .when(!on_selected, |d| d.hover(move |s| s.bg(hover)))
                     .child(ic)
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).when(is_head, |d| d.font_weight(FontWeight::SEMIBOLD)).when(row.is_none(), |d| d.text_color(t.ink_muted)).child(highlighted(t, &r.name, ranges)))
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).when(is_head, |d| d.font_weight(FontWeight::SEMIBOLD)).when(row.is_none(), |d| d.text_color(t.ink_muted)).child(highlighted(t, &r.name, ranges)))
                     .children(track.map(|s| div().flex_none().text_size(px(11.)).text_color(t.accent).child(s)))
                     .child(div().flex_none().size(px(7.)).rounded_full().bg(dot))
                     .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
