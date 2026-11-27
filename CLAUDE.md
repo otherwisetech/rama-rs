@@ -100,6 +100,12 @@ crates/app    `rama` desktop app (GPUI + gpui-component). map.rs / map_view.rs: 
 - GPUI pins: `Cargo.lock` pins the same zed / gpui-component revs as genealogy-rs. Building only
   `rama-repo` can prune them from the lock; restore it before building the app.
 
+## Release
+
+Releases stay in this repo (`gh release create vX.Y.Z` with each file and its `.sha256`).
+Notes, file names and issue forms follow the family's release rules: otherwisetech/otherwise-apps
+`docs/releases.md` (how the Hub discovers and verifies releases).
+
 ## Validate
 
 Never run write operations against a real repository while developing; use temp repos.
