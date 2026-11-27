@@ -221,13 +221,17 @@ fn a_failing_step_rolls_everything_back() {
     write(&m, "a.txt", "one\nmain wip\n");
     write(&w, "c.txt", "feat\nwt wip\n");
     write(&w, "u.txt", "untracked\n");
-    let wt_git = PathBuf::from(git(&w, &["rev-parse", "--absolute-git-dir"]).trim());
+    // Paths as git prints them (`C:/Users/...` on Windows, not `\\?\C:\...`), so the hook's
+    // shell can compare and touch them; there `pwd -W` gives the same form (MSYS `pwd -P`
+    // would give `/c/Users/...`), elsewhere it fails and `pwd -P` answers.
+    let wt_git = git(&w, &["rev-parse", "--absolute-git-dir"]).trim().to_string();
+    let m_top = git(&m, &["rev-parse", "--show-toplevel"]).trim().to_string();
     // main switching to feat locks wt's index, so wt can't take main; switching main back
     // unlocks it, so the undo can finish
     let hook = format!(
-        "#!/bin/sh\n[ \"$1\" = committed ] || {{ cat >/dev/null; exit 0; }}\nin=$(cat)\nhere=$(pwd -P)\n[ \"$here\" = \"{m}\" ] || exit 0\ncase \"$in\" in *\"ref:refs/heads/feat HEAD\"*) touch \"{l}\";; esac\ncase \"$in\" in *\"ref:refs/heads/main HEAD\"*) rm -f \"{l}\";; esac\nexit 0\n",
-        m = m.display(),
-        l = wt_git.join("index.lock").display()
+        "#!/bin/sh\n[ \"$1\" = committed ] || {{ cat >/dev/null; exit 0; }}\nin=$(cat)\nhere=$(pwd -W 2>/dev/null || pwd -P)\n[ \"$here\" = \"{m}\" ] || exit 0\ncase \"$in\" in *\"ref:refs/heads/feat HEAD\"*) touch \"{l}\";; esac\ncase \"$in\" in *\"ref:refs/heads/main HEAD\"*) rm -f \"{l}\";; esac\nexit 0\n",
+        m = m_top,
+        l = format!("{wt_git}/index.lock")
     );
     let hooks = m.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
